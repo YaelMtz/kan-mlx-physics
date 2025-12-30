@@ -1,0 +1,132 @@
+{
+  "system_info": {
+    "platform": "macOS-26.2-arm64-arm-64bit",
+    "processor": "arm",
+    "machine": "arm64",
+    "python_version": "3.11.14",
+    "mlx_version": "0.30.1",
+    "timestamp": "2025-12-30T01:12:18.138511",
+    "pykan_version": "0.2.x",
+    "torch_version": "2.9.1"
+  },
+  "config": {
+    "width": [
+      [
+        2,
+        0
+      ],
+      [
+        5,
+        0
+      ],
+      [
+        1,
+        0
+      ]
+    ],
+    "grid": 5,
+    "k": 3,
+    "train_steps": 2000,
+    "batch_size": 1000,
+    "learning_rate": 0.01,
+    "warmup_runs": 10,
+    "n_runs": 3,
+    "seed": 42
+  },
+  "mlx_results": {
+    "forward_pass": {
+      "framework": "mlx",
+      "benchmark": "forward_pass",
+      "model_size": "[2, 5, 1]",
+      "mean_time_ms": 0.6408346223179251,
+      "std_time_ms": 0.0852979273619257,
+      "min_time_ms": 0.5392089951783419,
+      "max_time_ms": 1.1095000663772225,
+      "memory_mb": 388.625,
+      "final_loss": null,
+      "n_runs": 100,
+      "extra": {}
+    },
+    "gradient_computation": {
+      "framework": "mlx",
+      "benchmark": "gradient_computation",
+      "model_size": "[[2, 0], [5, 0], [1, 0]]",
+      "mean_time_ms": 1.7391015705652535,
+      "std_time_ms": 0.4537445782027361,
+      "min_time_ms": 1.357291010208428,
+      "max_time_ms": 2.598291961476207,
+      "memory_mb": 442.203125,
+      "final_loss": 3.079403877258301,
+      "n_runs": 50,
+      "extra": {}
+    },
+    "training_2000_steps": {
+      "framework": "mlx",
+      "benchmark": "training_2000_steps",
+      "model_size": "[[2, 0], [5, 0], [1, 0]]",
+      "mean_time_ms": 3626.1890140206865,
+      "std_time_ms": 21.769025513228488,
+      "min_time_ms": 3602.4675420485437,
+      "max_time_ms": 3655.0440000137314,
+      "memory_mb": 0.0,
+      "final_loss": 0.00042228585031504434,
+      "n_runs": 3,
+      "extra": {
+        "steps": 2000
+      }
+    },
+    "symbolic_regression": {
+      "framework": "mlx",
+      "benchmark": "symbolic_regression",
+      "model_size": "[2, 5, 1]",
+      "mean_time_ms": 102705.244974792,
+      "std_time_ms": 692.247817603425,
+      "min_time_ms": 101606.6453329986,
+      "max_time_ms": 103577.27554196026,
+      "memory_mb": 7483.1875,
+      "final_loss": null,
+      "n_runs": 5,
+      "extra": {}
+    }
+  },
+  "pykan_results": {
+    "forward_pass": {
+      "framework": "pykan",
+      "benchmark": "forward_pass",
+      "model_size": "[[2, 0], [5, 0], [1, 0]]",
+      "mean_time_ms": 5.731432884931564,
+      "std_time_ms": 0.08090168280465138,
+      "min_time_ms": 5.420750007033348,
+      "max_time_ms": 5.922124953940511,
+      "memory_mb": 439.859375,
+      "final_loss": null,
+      "n_runs": 100,
+      "extra": {
+        "device": "mps"
+      }
+    },
+    "gradient_computation": {
+      "framework": "pykan",
+      "benchmark": "gradient_computation",
+      "model_size": "[[2, 0], [5, 0], [1, 0]]",
+      "mean_time_ms": 10.984536623582244,
+      "std_time_ms": 0.12361489711807244,
+      "min_time_ms": 10.703915962949395,
+      "max_time_ms": 11.226832983084023,
+      "memory_mb": 476.40625,
+      "final_loss": 3.8095157146453857,
+      "n_runs": 50,
+      "extra": {
+        "device": "mps"
+      }
+    },
+    "training_2000_steps": {
+      "framework": "pykan",
+      "benchmark": "training_2000_steps",
+      "model_size": "[[2, 0], [5, 0], [1, 0]]",
+      "mean_time_ms": 13211.73877765735,
+      "std_time_ms": 113.63982690803908,
+      "min_time_ms": 13102.141332929023,
+      "max_time_ms": 13368.33295901306,
+      "memory_mb": -0.84375,
+      "final_loss": 
