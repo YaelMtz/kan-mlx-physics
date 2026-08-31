@@ -24,6 +24,7 @@ from kan_mlx_physics.basis import (
     LaguerreBasis,
     LegendreBasis,
     BSplineBasis,
+    GaussianBasis,
     contract_basis_coef,
 )
 from kan_mlx_physics import KANLayer, MultKAN
@@ -72,7 +73,7 @@ class TestBasisShapes:
         return mx.random.uniform(shape=(32, 5))
 
     @pytest.mark.parametrize("basis_name", [
-        "fourier", "chebyshev", "hermite", "laguerre", "legendre"
+        "fourier", "chebyshev", "hermite", "laguerre", "legendre", "gaussian"
     ])
     def test_features_shape(self, basis_name, batch_input):
         """Test features() output shape: (batch, in_dim, M)."""
@@ -215,7 +216,7 @@ class TestGradients:
     """Test that gradients flow through basis functions."""
 
     @pytest.mark.parametrize("basis_name", [
-        "fourier", "chebyshev", "hermite", "laguerre", "legendre"
+        "fourier", "chebyshev", "hermite", "laguerre", "legendre", "gaussian"
     ])
     def test_gradient_exists(self, basis_name):
         """Test that gradients can be computed."""

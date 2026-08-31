@@ -5,6 +5,57 @@ This example demonstrates:
 2. Building a MultKAN model
 3. Training the model
 4. Evaluating and visualizing results
+
+Expected Output:
+===============
+Creating dataset...
+Train samples: 1000
+Test samples: 200
+
+Creating MultKAN model...
+MultKAN Summary
+========================================
+Width: [2, 5, 1]
+Depth: 2
+Grid: 5
+Spline order: 3
+Speed mode: False
+Versions saved: 0
+
+Layers:
+  [0] KANLayer: 2 → 5 (100 params)
+  [1] KANLayer: 5 → 1 (50 params)
+
+Total parameters: 150
+
+Training...
+Step    0 | Train: 0.794273 | Test: 0.899059 | Reg: 0.009918
+Step   10 | Train: 0.113492 | Test: 0.117964 | Reg: 0.010431
+Step   20 | Train: 0.034868 | Test: 0.034231 | Reg: 0.010094
+Step   30 | Train: 0.014045 | Test: 0.015987 | Reg: 0.010026
+Step   40 | Train: 0.005436 | Test: 0.005811 | Reg: 0.010075
+Step   50 | Train: 0.001775 | Test: 0.001776 | Reg: 0.010006
+Step   60 | Train: 0.001164 | Test: 0.000945 | Reg: 0.009942
+Step   70 | Train: 0.000700 | Test: 0.000662 | Reg: 0.009937
+Step   80 | Train: 0.000491 | Test: 0.000473 | Reg: 0.009910
+Step   90 | Train: 0.000380 | Test: 0.000366 | Reg: 0.009886
+Step   99 | Train: 0.000317 | Test: 0.000309 | Reg: 0.009870
+
+Final Results:
+Final train loss: 0.000317
+Final test loss: 0.000309
+
+Pruning edges...
+Saving visualization to ./figures/
+Saving model checkpoint...
+Done!
+
+Performance Notes:
+- Training converges rapidly to ~3e-4 loss within 100 steps
+- Grid updates occur at steps 0, 20, 40 to improve spline resolution
+- Model learns f(x,y) = sin(πx) + y² with high accuracy
+- Training time: ~1-2 seconds on Apple Silicon (M1/M2/M3)
+- Final test loss close to train loss indicates good generalization
 """
 
 import numpy as np

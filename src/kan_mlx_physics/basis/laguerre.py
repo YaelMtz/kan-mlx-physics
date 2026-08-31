@@ -15,6 +15,7 @@ The hydrogen atom radial functions are:
 """
 
 from typing import Dict, Any, Optional, List
+import math
 import mlx.core as mx
 
 from .base import Basis, BasisConfig
@@ -42,6 +43,8 @@ class LaguerreBasis(Basis):
         config: BasisConfig,
         alpha: float = 0.0,
         weighted: bool = False,
+        nonnegative_input: bool = False,
+        fixed_scale: float = 1.0,
     ):
         # Laguerre polynomials on [0, ∞)
         # Use sigmoid to map R -> (0, inf) smoothly
@@ -56,6 +59,42 @@ class LaguerreBasis(Basis):
 
         self.alpha = alpha
         self.weighted = weighted
+        # When True, skip softplus and use the input directly (after affine).
+        # Set this when the domain is guaranteed non-negative (e.g. r² ∈ [0,∞)).
+        # This lets the weighted basis represent exp(-x) exactly rather than
+        # exp(-softplus(x)/2), removing the systematic distortion of the exponent.
+        self.nonnegative_input = nonnegative_input
+        # Fixed (non-learnable) multiplicative scale applied to the input before
+        # the Laguerre recurrence and weighting.  With weighted=True and
+        # nonnegative_input=True the basis computes L_n(s·x)·exp(-s·x/2).
+        # Setting fixed_scale=2 gives exp(-x) for L_0, exactly matching
+        # the Wigner ground state W₀ = (1/π)·exp(-r²).
+        self.fixed_scale = fixed_scale
+
+    def _init_extra_params(
+        self,
+        in_dim: int,
+        out_dim=None,
+    ) -> Dict[str, mx.array]:
+        """Initialize scale_raw so that softplus(scale_raw) = 2.
+
+        With weighted=True the basis encodes exp(-x/2).  To represent
+        exp(-r²) the affine map must produce x = 2·r², requiring scale = 2.
+        softplus(scale_raw) = 2  =>  scale_raw = log(e² - 1) ≈ 2.127.
+        Starting here instead of softplus(0)≈0.693 removes one source of
+        systematic error in the symbolic coefficient.
+        """
+        if not self.config.learnable_affine:
+            return {}
+        # log(exp(2) - 1) ≈ 2.1269
+        scale_raw_init = math.log(math.exp(2.0) - 1.0)
+        if self.config.param_mode == "per_in":
+            return {"scale_raw": mx.full((in_dim,), scale_raw_init)}
+        if self.config.param_mode == "per_edge":
+            if out_dim is None:
+                return {}
+            return {"scale_raw": mx.full((in_dim, out_dim), scale_raw_init)}
+        return {}
 
     def _map_to_positive(self, x: mx.array) -> mx.array:
         """Map normalized x to [0, ∞) using softplus.
@@ -79,8 +118,16 @@ class LaguerreBasis(Basis):
         # Apply affine normalization
         x_norm = self._normalize(x, params)
 
+        # Apply fixed (non-learnable) scale before positivity mapping
+        if self.fixed_scale != 1.0:
+            x_norm = x_norm * self.fixed_scale
+
         # Map to positive domain
-        x_pos = self._map_to_positive(x_norm)
+        if self.nonnegative_input:
+            # Input is already non-negative; clamp to avoid log(0) in gradients.
+            x_pos = mx.maximum(x_norm, 1e-6)
+        else:
+            x_pos = self._map_to_positive(x_norm)
 
         batch, in_dim = x_pos.shape
         alpha = self.alpha
@@ -114,7 +161,7 @@ class LaguerreBasis(Basis):
     @property
     def symbolic_priority(self) -> List[str]:
         """Prioritize hydrogen-like radial functions."""
-        return ["exp", "R_10", "R_20", "R_21", "L_0", "L_1", "L_2", "x", "x^2"]
+        return ["L_0", "L_1", "L_2", "L_3", "L_4", "L_5", "exp", "x", "x^2"]
 
     def symbolic(
         self,

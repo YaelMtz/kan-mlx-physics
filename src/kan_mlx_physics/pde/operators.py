@@ -81,6 +81,54 @@ def _fd_mixed_derivative(f: Callable, x: mx.array, i: int, j: int, h: float = 1e
     return _fd_derivative(df_di, x, j, h)
 
 
+# =============================================================================
+# AUTODIFF DERIVATIVES (exact — preferred over finite differences)
+# =============================================================================
+# Finite differences with a fixed step h are catastrophically inaccurate for
+# 2nd derivatives in float32 (cancellation: subtracting near-equal numbers, then
+# dividing by h²). These autodiff versions are exact and roughly the same cost.
+# They use the batch-sum trick: mx.grad needs a scalar output, so we sum over the
+# batch (the sum's gradient w.r.t. each input is that input's own derivative).
+
+def _scalarize(f: Callable, x: mx.array) -> mx.array:
+    """Evaluate f(x) and reduce to a flat (batch,) vector."""
+    y = f(x)
+    if len(y.shape) > 1:
+        y = y[:, 0]
+    return y
+
+
+def _ad_first_derivative(f: Callable, x: mx.array, idx: int) -> mx.array:
+    """Exact ∂f/∂x_idx via autodiff (batch-sum trick)."""
+    def fsum(z):
+        return mx.sum(_scalarize(f, z))
+    return mx.grad(fsum)(x)[:, idx]
+
+
+def _ad_second_derivative(f: Callable, x: mx.array, idx: int) -> mx.array:
+    """Exact ∂²f/∂x_idx² via nested autodiff."""
+    def fsum(z):
+        return mx.sum(_scalarize(f, z))
+    grad_fn = mx.grad(fsum)
+
+    def d_idx_sum(z):
+        return mx.sum(grad_fn(z)[:, idx])
+
+    return mx.grad(d_idx_sum)(x)[:, idx]
+
+
+def _ad_mixed_derivative(f: Callable, x: mx.array, i: int, j: int) -> mx.array:
+    """Exact ∂²f/∂x_i∂x_j via nested autodiff."""
+    def fsum(z):
+        return mx.sum(_scalarize(f, z))
+    grad_fn = mx.grad(fsum)
+
+    def d_i_sum(z):
+        return mx.sum(grad_fn(z)[:, i])
+
+    return mx.grad(d_i_sum)(x)[:, j]
+
+
 def _make_delta(batch: int, dim: int, idx: int, h: float) -> mx.array:
     """Create perturbation vector with h at position idx."""
     if idx == 0:

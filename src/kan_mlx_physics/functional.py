@@ -24,9 +24,11 @@ LBFGS Optimization:
     final_params, result = lbfgs_optimize(loss_fn, params, max_iter=100)
 """
 
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, NamedTuple
+
 import mlx.core as mx
 import numpy as np
-from typing import Callable, List, Tuple, Optional, Any, Dict, NamedTuple, TYPE_CHECKING
 
 from .spline import B_batch
 
@@ -46,6 +48,7 @@ class LayerParams(NamedTuple):
         scale_base: Base function scaling factors of shape (in_dim, out_dim)
         grid: Knot positions of shape (in_dim, num_grid + 2*k + 1)
     """
+
     coef: mx.array
     scale_sp: mx.array
     scale_base: mx.array
@@ -53,10 +56,10 @@ class LayerParams(NamedTuple):
 
 
 # Type alias for list of layer parameters
-ParamsList = List[LayerParams]
+ParamsList = list[LayerParams]
 
 # Legacy alias for backward compatibility
-ParamsTuple = Tuple[mx.array, mx.array, mx.array, mx.array]
+ParamsTuple = tuple[mx.array, mx.array, mx.array, mx.array]
 
 
 def kan_layer_forward(
@@ -154,10 +157,13 @@ def get_params_list(model: "MultKAN") -> ParamsList:
     Returns:
         List of LayerParams(coef, scale_sp, scale_base, grid), one per layer
     """
-    return [
-        LayerParams(layer.coef, layer.scale_sp, layer.scale_base, layer.grid)
-        for layer in model.layers
-    ]
+    params = []
+    for layer in model.layers:
+        # Handle None grid (for non-spline bases like Laguerre)
+        # by using a placeholder empty array
+        grid = layer.grid if layer.grid is not None else mx.array([0.0])
+        params.append(LayerParams(layer.coef, layer.scale_sp, layer.scale_base, grid))
+    return params
 
 
 def set_params_list(model: "MultKAN", params_list: ParamsList) -> None:
@@ -174,7 +180,7 @@ def set_params_list(model: "MultKAN", params_list: ParamsList) -> None:
         # Note: grid is typically not updated during training
 
 
-def init_adam_state(params_list: ParamsList) -> Tuple[ParamsList, ParamsList]:
+def init_adam_state(params_list: ParamsList) -> tuple[ParamsList, ParamsList]:
     """Initialize Adam optimizer state (first and second moments).
 
     Args:
@@ -187,16 +193,20 @@ def init_adam_state(params_list: ParamsList) -> Tuple[ParamsList, ParamsList]:
     v_params = []
 
     for coef, scale_sp, scale_base, grid in params_list:
-        m_params.append((
-            mx.zeros_like(coef),
-            mx.zeros_like(scale_sp),
-            mx.zeros_like(scale_base),
-        ))
-        v_params.append((
-            mx.zeros_like(coef),
-            mx.zeros_like(scale_sp),
-            mx.zeros_like(scale_base),
-        ))
+        m_params.append(
+            (
+                mx.zeros_like(coef),
+                mx.zeros_like(scale_sp),
+                mx.zeros_like(scale_base),
+            )
+        )
+        v_params.append(
+            (
+                mx.zeros_like(coef),
+                mx.zeros_like(scale_sp),
+                mx.zeros_like(scale_base),
+            )
+        )
 
     return m_params, v_params
 
@@ -204,14 +214,14 @@ def init_adam_state(params_list: ParamsList) -> Tuple[ParamsList, ParamsList]:
 def adam_update(
     params_list: ParamsList,
     grads_list: ParamsList,
-    m_params: List[Tuple[mx.array, mx.array, mx.array]],
-    v_params: List[Tuple[mx.array, mx.array, mx.array]],
+    m_params: list[tuple[mx.array, mx.array, mx.array]],
+    v_params: list[tuple[mx.array, mx.array, mx.array]],
     t: mx.array,
     lr: float = 0.001,
     beta1: float = 0.9,
     beta2: float = 0.999,
     eps: float = 1e-8,
-) -> Tuple[ParamsList, List, List]:
+) -> tuple[ParamsList, list, list]:
     """Perform Adam optimizer update on parameters.
 
     This is a pure function suitable for use inside @mx.compile.
@@ -231,8 +241,8 @@ def adam_update(
         Tuple of (new_params_list, new_m_params, new_v_params)
     """
     # Bias correction factors
-    bc1 = 1.0 - beta1 ** t
-    bc2 = 1.0 - beta2 ** t
+    bc1 = 1.0 - beta1**t
+    bc2 = 1.0 - beta2**t
 
     new_params_list = []
     new_m_params = []
@@ -246,21 +256,21 @@ def adam_update(
 
         # Update coef
         m_coef = beta1 * m_coef + (1 - beta1) * g_coef
-        v_coef = beta2 * v_coef + (1 - beta2) * (g_coef ** 2)
+        v_coef = beta2 * v_coef + (1 - beta2) * (g_coef**2)
         m_hat = m_coef / bc1
         v_hat = v_coef / bc2
         new_coef = coef - lr * m_hat / (mx.sqrt(v_hat) + eps)
 
         # Update scale_sp
         m_sp = beta1 * m_sp + (1 - beta1) * g_scale_sp
-        v_sp = beta2 * v_sp + (1 - beta2) * (g_scale_sp ** 2)
+        v_sp = beta2 * v_sp + (1 - beta2) * (g_scale_sp**2)
         m_hat = m_sp / bc1
         v_hat = v_sp / bc2
         new_scale_sp = scale_sp - lr * m_hat / (mx.sqrt(v_hat) + eps)
 
         # Update scale_base
         m_base = beta1 * m_base + (1 - beta1) * g_scale_base
-        v_base = beta2 * v_base + (1 - beta2) * (g_scale_base ** 2)
+        v_base = beta2 * v_base + (1 - beta2) * (g_scale_base**2)
         m_hat = m_base / bc1
         v_hat = v_base / bc2
         new_scale_base = scale_base - lr * m_hat / (mx.sqrt(v_hat) + eps)
@@ -276,7 +286,8 @@ def adam_update(
 # LBFGS Optimizer
 # ============================================================
 
-def flatten_params(params_list: ParamsList) -> Tuple[np.ndarray, Dict[str, Any]]:
+
+def flatten_params(params_list: ParamsList) -> tuple[np.ndarray, dict[str, Any]]:
     """Flatten params_list to 1D numpy array.
 
     Args:
@@ -287,20 +298,22 @@ def flatten_params(params_list: ParamsList) -> Tuple[np.ndarray, Dict[str, Any]]
     """
     flat_parts = []
     metadata = {
-        'shapes': [],
-        'grids': [],
-        'n_layers': len(params_list),
+        "shapes": [],
+        "grids": [],
+        "n_layers": len(params_list),
     }
 
     for coef, scale_sp, scale_base, grid in params_list:
         # Store shapes
-        metadata['shapes'].append({
-            'coef': coef.shape,
-            'scale_sp': scale_sp.shape,
-            'scale_base': scale_base.shape,
-        })
+        metadata["shapes"].append(
+            {
+                "coef": coef.shape,
+                "scale_sp": scale_sp.shape,
+                "scale_base": scale_base.shape,
+            }
+        )
         # Store grids (not optimized)
-        metadata['grids'].append(np.array(grid))
+        metadata["grids"].append(np.array(grid))
 
         # Flatten trainable parameters
         flat_parts.append(np.array(coef).flatten())
@@ -310,7 +323,7 @@ def flatten_params(params_list: ParamsList) -> Tuple[np.ndarray, Dict[str, Any]]
     return np.concatenate(flat_parts), metadata
 
 
-def unflatten_params(flat: np.ndarray, metadata: Dict[str, Any]) -> ParamsList:
+def unflatten_params(flat: np.ndarray, metadata: dict[str, Any]) -> ParamsList:
     """Reconstruct params_list from flattened array.
 
     Args:
@@ -323,26 +336,26 @@ def unflatten_params(flat: np.ndarray, metadata: Dict[str, Any]) -> ParamsList:
     params_list = []
     offset = 0
 
-    for i in range(metadata['n_layers']):
-        shapes = metadata['shapes'][i]
-        grid = mx.array(metadata['grids'][i])
+    for i in range(metadata["n_layers"]):
+        shapes = metadata["shapes"][i]
+        grid = mx.array(metadata["grids"][i])
 
         # Reconstruct coef
-        coef_size = np.prod(shapes['coef'])
-        coef = mx.array(flat[offset:offset + coef_size].reshape(shapes['coef']))
+        coef_size = np.prod(shapes["coef"])
+        coef = mx.array(flat[offset : offset + coef_size].reshape(shapes["coef"]))
         offset += coef_size
 
         # Reconstruct scale_sp
-        sp_size = np.prod(shapes['scale_sp'])
-        scale_sp = mx.array(flat[offset:offset + sp_size].reshape(shapes['scale_sp']))
+        sp_size = np.prod(shapes["scale_sp"])
+        scale_sp = mx.array(flat[offset : offset + sp_size].reshape(shapes["scale_sp"]))
         offset += sp_size
 
         # Reconstruct scale_base
-        base_size = np.prod(shapes['scale_base'])
-        scale_base = mx.array(flat[offset:offset + base_size].reshape(shapes['scale_base']))
+        base_size = np.prod(shapes["scale_base"])
+        scale_base = mx.array(flat[offset : offset + base_size].reshape(shapes["scale_base"]))
         offset += base_size
 
-        params_list.append((coef, scale_sp, scale_base, grid))
+        params_list.append(LayerParams(coef, scale_sp, scale_base, grid))
 
     return params_list
 
@@ -354,9 +367,9 @@ def lbfgs_optimize(
     tolerance_grad: float = 1e-7,
     tolerance_change: float = 1e-9,
     history_size: int = 10,
-    callback: Optional[Callable[[np.ndarray, int], None]] = None,
+    callback: Callable[[np.ndarray, int], None] | None = None,
     verbose: bool = False,
-) -> Tuple[ParamsList, Any]:
+) -> tuple[ParamsList, Any]:
     """L-BFGS optimization for KAN parameters.
 
     Uses scipy.optimize.minimize with L-BFGS-B method for quasi-Newton
@@ -428,16 +441,16 @@ def lbfgs_optimize(
     result = minimize(
         objective,
         flat_init,
-        method='L-BFGS-B',
+        method="L-BFGS-B",
         jac=gradient,
         callback=scipy_callback,
         options={
-            'maxiter': max_iter,
-            'gtol': tolerance_grad,
-            'ftol': tolerance_change,
-            'maxcor': history_size,
-            'disp': False,
-        }
+            "maxiter": max_iter,
+            "gtol": tolerance_grad,
+            "ftol": tolerance_change,
+            "maxcor": history_size,
+            "disp": False,
+        },
     )
 
     if verbose:
@@ -452,10 +465,259 @@ def lbfgs_optimize(
     return final_params, result
 
 
+# ============================================================
+# Functional Optimizer (works with params lists)
+# ============================================================
+
+
+class FunctionalOptimizer:
+    """Optimizer that works with the functional API's params list format.
+
+    This bridges the gap between mlx.optimizers and the functional API,
+    providing a familiar interface while supporting params lists.
+
+    Example:
+        from kan_mlx_physics.functional import get_params_list, FunctionalOptimizer
+
+        model = MultKAN(width=[1, 5, 1])
+        params = get_params_list(model)
+
+        optimizer = FunctionalOptimizer(params, lr=0.01, optimizer='adam')
+
+        for epoch in range(100):
+            loss, grads = loss_and_grad(params, x)
+            params = optimizer.update(params, grads)
+
+        set_params_list(model, params)
+    """
+
+    def __init__(
+        self,
+        params: ParamsList,
+        lr: float = 0.001,
+        optimizer: str = "adam",
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+        weight_decay: float = 0.0,
+        momentum: float = 0.9,
+    ):
+        """Initialize the functional optimizer.
+
+        Args:
+            params: Initial params list from get_params_list()
+            lr: Learning rate
+            optimizer: Optimizer type ('adam', 'sgd', 'adamw')
+            beta1: Adam beta1 (momentum decay)
+            beta2: Adam beta2 (RMSprop decay)
+            eps: Small constant for numerical stability
+            weight_decay: L2 regularization weight (for adamw)
+            momentum: Momentum for SGD
+        """
+        self.lr = lr
+        self.optimizer_type = optimizer.lower()
+        self.beta1 = beta1
+        self.beta2 = beta2
+        self.eps = eps
+        self.weight_decay = weight_decay
+        self.momentum = momentum
+        self.t = 0
+
+        # Initialize optimizer state
+        self._init_state(params)
+
+    def _init_state(self, params: ParamsList):
+        """Initialize optimizer state based on optimizer type."""
+        if self.optimizer_type in ("adam", "adamw"):
+            # First moment (m) and second moment (v) for Adam
+            self.m = []
+            self.v = []
+            for coef, scale_sp, scale_base, grid in params:
+                self.m.append(
+                    (
+                        mx.zeros_like(coef),
+                        mx.zeros_like(scale_sp),
+                        mx.zeros_like(scale_base),
+                    )
+                )
+                self.v.append(
+                    (
+                        mx.zeros_like(coef),
+                        mx.zeros_like(scale_sp),
+                        mx.zeros_like(scale_base),
+                    )
+                )
+        elif self.optimizer_type == "sgd":
+            # Velocity for momentum SGD
+            self.velocity = []
+            for coef, scale_sp, scale_base, grid in params:
+                self.velocity.append(
+                    (
+                        mx.zeros_like(coef),
+                        mx.zeros_like(scale_sp),
+                        mx.zeros_like(scale_base),
+                    )
+                )
+        else:
+            raise ValueError(f"Unknown optimizer: {self.optimizer_type}")
+
+    @property
+    def state(self) -> list:
+        """Return optimizer state for mx.eval().
+
+        Returns a flat list of all state tensors (m, v for Adam, velocity for SGD).
+        """
+        state_tensors = []
+        if self.optimizer_type in ("adam", "adamw"):
+            for m_tuple, v_tuple in zip(self.m, self.v):
+                state_tensors.extend(m_tuple)
+                state_tensors.extend(v_tuple)
+        elif self.optimizer_type == "sgd":
+            for v_tuple in self.velocity:
+                state_tensors.extend(v_tuple)
+        return state_tensors
+
+    def update(self, params: ParamsList, grads: ParamsList) -> ParamsList:
+        """Update parameters using gradients.
+
+        Args:
+            params: Current parameters
+            grads: Gradients (same structure as params)
+
+        Returns:
+            Updated parameters
+        """
+        self.t += 1
+
+        if self.optimizer_type == "adam":
+            return self._adam_update(params, grads)
+        elif self.optimizer_type == "adamw":
+            return self._adamw_update(params, grads)
+        elif self.optimizer_type == "sgd":
+            return self._sgd_update(params, grads)
+        else:
+            raise ValueError(f"Unknown optimizer: {self.optimizer_type}")
+
+    def _adam_update(self, params: ParamsList, grads: ParamsList) -> ParamsList:
+        """Adam optimizer update."""
+        bc1 = 1.0 - self.beta1**self.t
+        bc2 = 1.0 - self.beta2**self.t
+
+        new_params = []
+        new_m = []
+        new_v = []
+
+        for i, ((coef, scale_sp, scale_base, grid), (g_coef, g_sp, g_base, _)) in enumerate(
+            zip(params, grads)
+        ):
+            m_coef, m_sp, m_base = self.m[i]
+            v_coef, v_sp, v_base = self.v[i]
+
+            # Update coef
+            m_coef = self.beta1 * m_coef + (1 - self.beta1) * g_coef
+            v_coef = self.beta2 * v_coef + (1 - self.beta2) * (g_coef**2)
+            new_coef = coef - self.lr * (m_coef / bc1) / (mx.sqrt(v_coef / bc2) + self.eps)
+
+            # Update scale_sp
+            m_sp = self.beta1 * m_sp + (1 - self.beta1) * g_sp
+            v_sp = self.beta2 * v_sp + (1 - self.beta2) * (g_sp**2)
+            new_sp = scale_sp - self.lr * (m_sp / bc1) / (mx.sqrt(v_sp / bc2) + self.eps)
+
+            # Update scale_base
+            m_base = self.beta1 * m_base + (1 - self.beta1) * g_base
+            v_base = self.beta2 * v_base + (1 - self.beta2) * (g_base**2)
+            new_base = scale_base - self.lr * (m_base / bc1) / (mx.sqrt(v_base / bc2) + self.eps)
+
+            new_params.append(LayerParams(new_coef, new_sp, new_base, grid))
+            new_m.append((m_coef, m_sp, m_base))
+            new_v.append((v_coef, v_sp, v_base))
+
+        self.m = new_m
+        self.v = new_v
+        return new_params
+
+    def _adamw_update(self, params: ParamsList, grads: ParamsList) -> ParamsList:
+        """AdamW optimizer update (Adam with decoupled weight decay)."""
+        bc1 = 1.0 - self.beta1**self.t
+        bc2 = 1.0 - self.beta2**self.t
+
+        new_params = []
+        new_m = []
+        new_v = []
+
+        for i, ((coef, scale_sp, scale_base, grid), (g_coef, g_sp, g_base, _)) in enumerate(
+            zip(params, grads)
+        ):
+            m_coef, m_sp, m_base = self.m[i]
+            v_coef, v_sp, v_base = self.v[i]
+
+            # Weight decay
+            coef = coef * (1 - self.lr * self.weight_decay)
+            scale_sp = scale_sp * (1 - self.lr * self.weight_decay)
+            scale_base = scale_base * (1 - self.lr * self.weight_decay)
+
+            # Update coef
+            m_coef = self.beta1 * m_coef + (1 - self.beta1) * g_coef
+            v_coef = self.beta2 * v_coef + (1 - self.beta2) * (g_coef**2)
+            new_coef = coef - self.lr * (m_coef / bc1) / (mx.sqrt(v_coef / bc2) + self.eps)
+
+            # Update scale_sp
+            m_sp = self.beta1 * m_sp + (1 - self.beta1) * g_sp
+            v_sp = self.beta2 * v_sp + (1 - self.beta2) * (g_sp**2)
+            new_sp = scale_sp - self.lr * (m_sp / bc1) / (mx.sqrt(v_sp / bc2) + self.eps)
+
+            # Update scale_base
+            m_base = self.beta1 * m_base + (1 - self.beta1) * g_base
+            v_base = self.beta2 * v_base + (1 - self.beta2) * (g_base**2)
+            new_base = scale_base - self.lr * (m_base / bc1) / (mx.sqrt(v_base / bc2) + self.eps)
+
+            new_params.append(LayerParams(new_coef, new_sp, new_base, grid))
+            new_m.append((m_coef, m_sp, m_base))
+            new_v.append((v_coef, v_sp, v_base))
+
+        self.m = new_m
+        self.v = new_v
+        return new_params
+
+    def _sgd_update(self, params: ParamsList, grads: ParamsList) -> ParamsList:
+        """SGD with momentum update."""
+        new_params = []
+        new_velocity = []
+
+        for i, ((coef, scale_sp, scale_base, grid), (g_coef, g_sp, g_base, _)) in enumerate(
+            zip(params, grads)
+        ):
+            v_coef, v_sp, v_base = self.velocity[i]
+
+            # Update with momentum
+            v_coef = self.momentum * v_coef + g_coef
+            v_sp = self.momentum * v_sp + g_sp
+            v_base = self.momentum * v_base + g_base
+
+            new_coef = coef - self.lr * v_coef
+            new_sp = scale_sp - self.lr * v_sp
+            new_base = scale_base - self.lr * v_base
+
+            new_params.append(LayerParams(new_coef, new_sp, new_base, grid))
+            new_velocity.append((v_coef, v_sp, v_base))
+
+        self.velocity = new_velocity
+        return new_params
+
+    @property
+    def state(self):
+        """Return optimizer state for mx.eval()."""
+        if self.optimizer_type in ("adam", "adamw"):
+            return self.m + self.v
+        elif self.optimizer_type == "sgd":
+            return self.velocity
+        return []
+
+
 def lbfgs_fit(
     model,
-    dataset: Dict[str, mx.array],
-    loss_fn: Optional[Callable] = None,
+    dataset: dict[str, mx.array],
+    loss_fn: Callable | None = None,
     max_iter: int = 100,
     lamb: float = 0.0,
     lamb_l1: float = 1.0,
@@ -463,7 +725,7 @@ def lbfgs_fit(
     update_grid: bool = True,
     grid_update_freq: int = 20,
     verbose: bool = True,
-) -> Dict[str, List[float]]:
+) -> dict[str, list[float]]:
     """Fit model using L-BFGS optimizer.
 
     Convenience function that handles parameter extraction, optimization,
@@ -488,8 +750,8 @@ def lbfgs_fit(
         dataset = {'train_input': x, 'train_label': y}
         history = lbfgs_fit(model, dataset, max_iter=50)
     """
-    x_train = dataset['train_input']
-    y_train = dataset['train_label']
+    x_train = dataset["train_input"]
+    y_train = dataset["train_label"]
 
     k = model.k
     base_fun = model.base_fun
@@ -499,6 +761,7 @@ def lbfgs_fit(
 
     # Default loss function
     if loss_fn is None:
+
         def loss_fn(params):
             y_pred = functional_forward(params, x_train, k, base_fun)
             mse = mx.mean((y_pred - y_train) ** 2)
@@ -515,11 +778,11 @@ def lbfgs_fit(
 
             return mse + lamb * reg
 
-    history = {'loss': [], 'iteration': []}
+    history = {"loss": [], "iteration": []}
     last_grid_update = [0]
 
     def callback(xk, iteration):
-        history['iteration'].append(iteration)
+        history["iteration"].append(iteration)
 
         # Grid update
         if update_grid and iteration - last_grid_update[0] >= grid_update_freq:
@@ -549,8 +812,8 @@ def lbfgs_fit(
     # Update model
     set_params_list(model, final_params)
 
-    history['final_loss'] = float(result.fun)
-    history['converged'] = result.success
-    history['message'] = result.message
+    history["final_loss"] = float(result.fun)
+    history["converged"] = result.success
+    history["message"] = result.message
 
     return history

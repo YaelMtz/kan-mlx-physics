@@ -4,6 +4,110 @@ This example demonstrates how KANs can discover symbolic formulas:
 1. Train a KAN on synthetic data from f(x,y) = sin(pi*x) + y^2
 2. Use auto_symbolic to discover the underlying formula
 3. Extract and display the formula in both text and LaTeX formats
+
+Expected Output:
+===============
+
+Available symbolic functions:
+['x', '0', '1', 'x^2', 'x^3', 'x^4', 'x^0.5', 'x^-1', 'x^-2', 'sin', 'cos',
+ 'tan', 'arcsin', 'arccos', 'arctan', 'exp', 'log', 'sinh', 'cosh', 'tanh',
+ 'abs', 'sign', 'gaussian', 'sigmoid', 'relu', 'softplus']
+
+==================================================
+Creating dataset for f(x,y) = sin(πx) + y²
+==================================================
+
+Creating KAN model with width=[2, 1]...
+MultKAN Summary
+========================================
+Width: [2, 1]
+Depth: 1
+Grid: 10
+Spline order: 3
+Total parameters: 30
+
+Layers:
+  [0] KANLayer: 2 → 1 (30 params)
+
+==================================================
+Training...
+==================================================
+Step    0 | Train: 0.296031 | Test: 0.280825 | Reg: 0.002535
+Step   20 | Train: 0.009377 | Test: 0.008668 | Reg: 0.002758
+Step   40 | Train: 0.000783 | Test: 0.000758 | Reg: 0.002741
+Step   60 | Train: 0.000192 | Test: 0.000196 | Reg: 0.002749
+Step   80 | Train: 0.000081 | Test: 0.000073 | Reg: 0.002740
+Step  100 | Train: 0.000049 | Test: 0.000043 | Reg: 0.002739
+Step  199 | Train: 0.000036 | Test: 0.000032 | Reg: 0.002733
+
+Final train loss: 0.000036
+Final test loss: 0.000032
+
+==================================================
+Suggesting symbolic functions for each edge...
+==================================================
+
+Edge (0, 0, 0) - from input x_0 to output:
+  sin          R² = 0.9573  ← Correctly identifies sin function
+  cos          R² = 0.9566
+  gaussian     R² = 0.6740
+
+Edge (0, 1, 0) - from input x_1 to output:
+  x^2          R² = 0.9998  ← Correctly identifies quadratic
+  cos          R² = 0.9996
+  sin          R² = 0.9996
+
+==================================================
+Fixing symbolic functions...
+==================================================
+Edge (0,0,0): sin
+  Params: a=-4.141, b=-3.333, c=0.766, d=0.161
+  R² = 0.9573
+Edge (0,1,0): x^2
+  Params: a=-6.566, b=0.303, c=0.039, d=-0.440
+  R² = 0.9998
+
+==================================================
+Extracted Symbolic Formula:
+==================================================
+
+Layer 0 outputs:
+  y_0 = (0.77*sin((-4.14*x - 3.33)) + 0.16 + 0.04*((-6.57*y + 0.30))^2 - 0.44)
+
+Final formula:
+  f(x, y) = (0.77*sin((-4.14*x - 3.33)) + 0.16 + 0.04*((-6.57*y + 0.30))^2 - 0.44)
+
+LaTeX: $f(x, y) = 0.77 \\sin((-4.14 x - 3.33)) + 0.16 + 0.04 (-6.57 y + 0.30)^2 - 0.44$
+
+==================================================
+Auto-symbolic Detection (fresh model):
+==================================================
+Layer 0:
+  (0,0): sin (R²=0.9530)
+  (1,0): x^2 (R²=0.9998)
+
+Fixed 2 edges to symbolic functions
+
+Performance Notes:
+------------------
+- Training converges to ~3.6e-5 loss within 200 steps (~2 seconds on Apple Silicon)
+- Symbolic regression correctly identifies both sin and x^2 components
+- R² scores > 0.95 indicate excellent symbolic fit
+- Auto-symbolic can automatically detect functions without manual fixing
+- The model learns affine transformations (a,b,c,d parameters) around the core symbolic functions
+
+Key Features Demonstrated:
+--------------------------
+1. suggest_symbolic(): Ranks symbolic functions by R² score for each edge
+2. fix_symbolic(): Manually sets an edge to a specific symbolic function
+3. auto_symbolic(): Automatically detects and fixes symbolic functions above R² threshold
+4. symbolic_formula(): Extracts human-readable formula in text format
+5. symbolic_formula_latex(): Exports formula for LaTeX documents
+6. symbolic_formula_typst(): Exports formula for Typst documents
+7. Visualizations saved to ./figures/
+
+The extracted formulas show the learned affine parameters around the core symbolic functions.
+These can be further refined using global parameter optimization if needed.
 """
 
 import numpy as np

@@ -1,0 +1,43 @@
+name: tests
+
+# MLX requires Apple Silicon, so tests run on GitHub's macOS runners
+# (macos-14 and later are M-series / arm64). Linux/Windows runners cannot
+# execute the MLX code paths and are intentionally not used.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: macos-14        # Apple Silicon (arm64) runner
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      - name: Sync environment (from uv.lock)
+        run: uv sync --python ${{ matrix.python-version }}
+
+      - name: Confirm MLX runs on this runner
+        run: uv run python -c "import mlx.core as mx; print('mlx', mx.__version__); print(mx.arange(3))"
+
+      - name: Run test suite
+        # Cross-library (PyKAN) tests need torch+pykan and are excluded from CI;
+        # they skip cleanly locally when those optional deps are present/absent.
+        run: uv run --with pytest python -m pytest tests/ -q --ignore=tests/test_pykan_numerical.py --ignore=tests/test_pykan_compatibility.py
+
+      - name: Smoke-test the flagship example
+        run: uv run python examples/wigner_harmonic_oscillator.py

@@ -493,11 +493,33 @@ Increase grid resolution while preserving learned functions.
 model.prune(
     threshold: float = 1e-2,
     mode: str = "auto",
-    active_neurons_id: Optional[List] = None,
-) -> None
+    active_neurons_id: Optional[List[List[int]]] = None,
+) -> MultKAN
 ```
 
-Prune unimportant edges and nodes.
+Combined node and edge pruning for network simplification.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `threshold` | `float` | 0.01 | Edges/nodes with scores below this are pruned |
+| `mode` | `str` | "auto" | "auto" (automatic) or "manual" (specify neurons) |
+| `active_neurons_id` | `List[List[int]]` | None | For manual mode: list of neuron IDs to keep per layer |
+
+**Returns:** Self (for method chaining).
+
+**Example:**
+```python
+# Train first
+model.fit(dataset, steps=500)
+
+# Auto-prune: removes edges and nodes below threshold
+model.prune(threshold=0.01)
+
+# Manual pruning: keep specific neurons
+model.prune(mode="manual", active_neurons_id=[[0, 1], [0, 2, 3]])
+```
 
 #### prune_edges()
 
@@ -505,15 +527,15 @@ Prune unimportant edges and nodes.
 model.prune_edges(threshold: float = 0.01) -> None
 ```
 
-Set low-importance edges to zero.
+Prune edges with low importance scores (sets mask to 0).
 
 #### prune_nodes()
 
 ```python
-model.prune_nodes(threshold: float = 0.01) -> None
+model.prune_nodes(threshold: float = 0.01) -> List[int]
 ```
 
-Remove nodes with low contribution.
+Remove hidden nodes with low total contribution. Returns new width configuration.
 
 #### prune_input()
 
@@ -521,7 +543,7 @@ Remove nodes with low contribution.
 model.prune_input(threshold: float = 1e-2) -> List[int]
 ```
 
-Remove inactive input dimensions. Returns list of removed indices.
+Remove inactive input dimensions. Returns list of kept input indices (useful for feature selection).
 
 #### expand_width()
 
@@ -1113,6 +1135,131 @@ class PINNOperators:
     def d2x(self, params: ParamsList, x: mx.array, component: int = 0) -> mx.array
 ```
 
+### PINNTrainer Class
+
+High-level trainer for Physics-Informed Neural Networks with built-in derivative operators.
+
+```python
+class PINNTrainer:
+    def __init__(
+        self,
+        model: MultKAN,
+        lr: float = 0.001,
+        optimizer: str = "adam",
+        derivative_method: str = "autodiff",
+        finite_diff_h: float = 1e-3,
+        compile: bool = False,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        weight_decay: float = 0.0,
+    )
+```
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `model` | `MultKAN` | Required | The KAN model to train |
+| `lr` | `float` | 0.001 | Learning rate |
+| `optimizer` | `str` | "adam" | Optimizer: "adam", "adamw", "sgd", or "lbfgs" |
+| `derivative_method` | `str` | "autodiff" | "autodiff" (batch-grad trick) or "finite_diff" |
+| `finite_diff_h` | `float` | 1e-3 | Step size for finite differences |
+| `compile` | `bool` | False | Use @mx.compile for faster training |
+| `beta1`, `beta2` | `float` | 0.9, 0.999 | Adam momentum parameters |
+| `weight_decay` | `float` | 0.0 | Weight decay for AdamW |
+
+**Properties:**
+
+```python
+# Dynamic learning rate adjustment
+trainer.lr = 0.0003  # Change LR during training (e.g., for phase 2)
+current_lr = trainer.lr
+```
+
+**Derivative Methods:**
+
+```python
+# For autodiff mode: u(params, x)
+# For finite_diff mode: u(x)
+
+trainer.u(*args)         # u(x), shape (N,)
+trainer.du(*args)        # du/dx, shape (N,) or (N, dim)
+trainer.d2u(*args)       # d²u/dx², shape (N,) or (N, dim)
+trainer.laplacian(*args) # ∇²u = Σᵢ d²u/dxᵢ², shape (N,)
+```
+
+**Training Methods:**
+
+```python
+# Single training step
+loss = trainer.step(loss_fn, *loss_args)
+
+# Full training loop
+history = trainer.train(loss_fn, data_fn, epochs=1000, log_freq=100)
+
+# L-BFGS optimization (second-order, faster convergence)
+result = trainer.fit_lbfgs(loss_fn, x_train, max_iter=100)
+```
+
+**Auto-detect Loss Signature (finite_diff mode):**
+
+The trainer auto-detects whether your loss function expects `model` as first argument:
+
+```python
+# Both signatures work in finite_diff mode:
+
+# Option 1: No model arg (recommended)
+def loss_fn(x, alpha):
+    u = trainer.u(x)
+    u_xx = trainer.d2u(x)
+    return mx.mean((u_xx + alpha * u)**2)
+
+# Option 2: With model arg (traditional)
+def loss_fn(model, x, alpha):
+    u = trainer.u(x)
+    return mx.mean(u**2)
+
+trainer.step(loss_fn, x_train, alpha=1.0)
+```
+
+**Example (finite_diff with L-BFGS):**
+
+```python
+from kan_mlx_physics import MultKAN, PINNTrainer
+
+model = MultKAN(width=[1, 10, 1], basis="hermite")
+trainer = PINNTrainer(
+    model,
+    lr=0.001,
+    optimizer="lbfgs",
+    derivative_method="finite_diff",
+    compile=True,
+)
+
+def pde_loss(x):
+    u = trainer.u(x)
+    u_xx = trainer.d2u(x)
+    return mx.mean((u_xx + u)**2)  # u'' + u = 0
+
+# Phase 1: L-BFGS optimization
+result = trainer.fit_lbfgs(pde_loss, x_train, max_iter=100)
+
+# Phase 2: Fine-tune with lower LR
+trainer.lr = 0.0001
+for epoch in range(500):
+    loss = trainer.step(pde_loss, x_train)
+```
+
+### Finite Difference Derivatives
+
+```python
+make_finite_diff_derivative_fns(
+    model: MultKAN,
+    h: float = 1e-3,
+) -> Tuple[Callable, Callable, Callable]
+```
+Create u, du/dx, d2u/dx2 using central finite differences (avoids nested autodiff issues).
+
 ### Compiled Training
 
 ```python
@@ -1126,7 +1273,7 @@ make_compiled_pinn_step(
 ```
 Create a `@mx.compile` decorated training step.
 
-### Finite Differences
+### Finite Differences (Validation)
 
 ```python
 finite_difference_laplacian(
@@ -1345,6 +1492,113 @@ Plot 1D spline curves.
 plot = plot_kan  # Alias
 ```
 
+### LivePlotter
+
+Live visualization of the learned function during training, with optional video export.
+
+**Location:** `kan_mlx_physics.visualization` (also exported from the top-level package)
+
+```python
+LivePlotter(
+    freq: int = 500,
+    x_range: Optional[Tuple[float, float]] = None,
+    analytic_fn: Optional[Callable] = None,
+    n_plot_points: int = 200,
+    show_kan: bool = False,
+    var_name: str = "x",
+    fn_name: str = "W",
+    figsize: Tuple[float, float] = (8, 4),
+    # Video export
+    record: bool = False,
+    video_path: str = "training.mp4",
+    fps: int = 15,
+    dpi: int = 150,
+    writer: str = "ffmpeg",
+)
+```
+
+`LivePlotter` is rarely instantiated directly — use the `.live_plot()` method on `PDEBuilder` instead.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `freq` | `int` | `500` | Refresh the plot every this many *logged* steps. Effective rate is `max(freq, phase.log_freq)`. |
+| `x_range` | `(float, float)` | `None` | x-axis range. Inferred from `domain` bounds if not set. |
+| `analytic_fn` | `Callable` | `None` | `f(x_np) -> y_np` — draws a dashed reference line. |
+| `n_plot_points` | `int` | `200` | Points at which the model is evaluated for the plot. |
+| `show_kan` | `bool` | `False` | Call `model.plot()` (KAN network graph) after every phase. |
+| `var_name` | `str` | `"x"` | x-axis label. |
+| `fn_name` | `str` | `"W"` | y-axis / legend label. |
+| `figsize` | `tuple` | `(8, 4)` | Figure size in inches. |
+| `record` | `bool` | `False` | Capture every update as a video frame and write to file on close. |
+| `video_path` | `str` | `"training.mp4"` | Output file path — `.mp4` or `.gif`. |
+| `fps` | `int` | `15` | Frames per second in the output video. |
+| `dpi` | `int` | `150` | Resolution of each video frame. |
+| `writer` | `str` | `"ffmpeg"` | `"ffmpeg"` → H.264 MP4 (requires `ffmpeg` binary); `"pillow"` → animated GIF (requires `Pillow`). Falls back to `"pillow"` if ffmpeg is not found. |
+
+**Preferred usage — via `PDEBuilder.live_plot()`:**
+
+```python
+model, h = (
+    PDEBuilder("...")
+    .domain([0, 6.0])
+    .live_plot(
+        freq=200,
+        analytic_fn=lambda r2: np.exp(-r2) / np.pi,
+        var_name="r²",
+        fn_name="W",
+    )
+    .solve()
+)
+```
+
+**With video export:**
+
+```python
+.live_plot(
+    freq=100,
+    analytic_fn=lambda r2: np.exp(-r2) / np.pi,
+    var_name="r²",
+    fn_name="W",
+    record=True,
+    video_path="wigner_n0.mp4",
+    fps=20,
+    dpi=150,
+)
+```
+
+**GIF export (no ffmpeg required):**
+
+```python
+.live_plot(
+    freq=100,
+    record=True,
+    video_path="wigner_n0.gif",
+    writer="pillow",
+    fps=10,
+)
+```
+
+**How frames are counted:**
+
+The total number of video frames equals the number of times `on_step` fires and the step passes the `freq` check:
+
+```
+frames ≈ total_steps / (log_freq × freq)
+```
+
+For a 10 000-step run with `log_freq=100` and `freq=1`, you get ~100 frames. At 15 fps that is a ~7-second video.
+
+**Dependencies:**
+
+| Output | Required |
+|--------|----------|
+| Live display (script) | `matplotlib` |
+| Live display (Jupyter) | `matplotlib`, `IPython` |
+| MP4 export | `matplotlib`, `ffmpeg` binary on `PATH` |
+| GIF export | `matplotlib`, `Pillow` (`pip install Pillow`) |
+
 ---
 
 ## Utilities
@@ -1401,20 +1655,224 @@ High-level PDE solving with domain-specific language.
 
 **Location:** `kan_mlx_physics.pde`
 
-### Main Solver
+### PDEBuilder (Fluent DSL)
+
+The recommended way to solve PDEs. Provides a declarative, chainable API.
 
 ```python
-solve(
-    equation: str,
-    domain: Union[List, Dict] = [-1, 1],
-    params: Dict = {},
-    solver_config: Optional[SolverConfig] = None,
-) -> Tuple[MultKAN, Dict]
+from kan_mlx_physics.pde import PDEBuilder
+
+PDEBuilder(equation: str)
 ```
-Solve PDE from string specification.
 
-**Example:**
+**Method Chain:**
+
 ```python
+model, history = (
+    PDEBuilder(equation)         # Start with PDE equation
+        .params(...)             # Physical constants
+        .trainable_params(...)   # Parameters to optimize via Adam
+        .domain([a, b])          # Spatial domain
+        .loss(...)               # Add loss terms (repeatable)
+        .phase(...)              # Training phases (repeatable)
+        .model(...)              # Network architecture
+        .live_plot(...)          # Optional: live visualization + video export
+        .solve(verbose=True)     # Execute training
+)
+```
+
+#### .params(**kwargs)
+
+Define fixed physical constants:
+
+```python
+.params(hbar=1.0, mass=1.0, k=2.0)
+```
+
+#### .trainable_params(*names)
+
+Mark parameters to be optimized via Adam (e.g., eigenvalues):
+
+```python
+.params(E=1.0)
+.trainable_params("E")  # E will be trained alongside model weights
+```
+
+#### .domain(bounds)
+
+Set spatial domain:
+
+```python
+.domain([0, 2.0])              # 1D: x ∈ [0, 2]
+.domain({"x": [0, 1], "y": [0, 1]})  # 2D
+```
+
+#### .loss(loss_term)
+
+Add loss terms (can be called multiple times):
+
+```python
+from kan_mlx_physics.pde import (
+    PDEResidualLoss,
+    BoundaryConditionLoss,
+    NormalizationLoss,
+    NonTrivialLoss,
+    EigenvalueLoss,
+    DecayLoss,
+    SmoothnessLoss,
+    AnchorLoss,
+)
+
+.loss(PDEResidualLoss(weight=500, normalize=False))
+.loss(BoundaryConditionLoss(bc_type="dirichlet", weight=1000, target=0.0))
+.loss(NormalizationLoss(weight=100, target=1.0))
+.loss(NonTrivialLoss(weight=200, scale=10.0))
+.loss(EigenvalueLoss(param_name="E", method="trainable", weight=3))
+```
+
+**Available Loss Terms:**
+
+| Loss | Purpose | Key Parameters |
+|------|---------|----------------|
+| `PDEResidualLoss` | PDE equation residual | `weight`, `normalize` |
+| `BoundaryConditionLoss` | Dirichlet/Neumann BCs | `bc_type`, `target`, `weight` |
+| `NormalizationLoss` | ∫\|u\|² = target | `target` (default 1.0) |
+| `NonTrivialLoss` | Prevent zero solution | `scale` (default 10.0) |
+| `EigenvalueLoss` | Eigenvalue problems | `method` ("trainable"/"rayleigh"), `param_name` |
+| `DecayLoss` | Decay at boundaries | `threshold_ratio` |
+| `SmoothnessLoss` | Penalize oscillations | `weight` |
+| `AnchorLoss` | Fix value at point | `x0`, `target` |
+
+#### .phase(name, **kwargs)
+
+Define training phases (can be called multiple times):
+
+```python
+.phase(
+    "initial",
+    steps=2000,
+    lr=0.003,
+    n_points=1000,        # Collocation points
+    log_freq=400,         # Logging frequency
+)
+.phase(
+    "refine",
+    steps=1000,
+    lr=0.0015,
+    grid_update_before=True,  # Adaptive grid refinement
+    log_freq=200,
+)
+```
+
+#### .model(**kwargs)
+
+Configure network architecture:
+
+```python
+.model(
+    width=[1, 2, 1],
+    grid=5,
+    k=3,
+    grid_range=(0, 2.0),
+    noise_scale=0.1,
+    seed=42,
+    basis="bspline",      # or "fourier", "hermite", etc.
+)
+```
+
+#### .live_plot(**kwargs)
+
+Attach a `LivePlotter` for live visualization and optional video export. Must be called before `.solve()`.
+
+```python
+.live_plot(
+    freq=200,                                          # Refresh every 200 logged steps
+    analytic_fn=lambda r2: np.exp(-r2) / np.pi,       # Optional reference line
+    var_name="r²",                                     # x-axis label
+    fn_name="W",                                       # y-axis label
+    show_kan=False,                                    # Show KAN graph at phase ends
+    record=False,                                      # Enable video capture
+    video_path="training.mp4",                         # Output file (.mp4 or .gif)
+    fps=15,                                            # Frames per second
+    dpi=150,                                           # Video resolution
+    writer="ffmpeg",                                   # "ffmpeg" (MP4) or "pillow" (GIF)
+)
+```
+
+See [LivePlotter](#liveplotter) for full parameter documentation.
+
+#### .solve(verbose=True)
+
+Execute training and return model + history:
+
+```python
+model, history = builder.solve(verbose=True)
+
+# Access results
+print(history.final_loss)
+print(history.trainable_params)  # Dict of trained param values
+print(history.eigenvalue)        # Computed eigenvalue (if applicable)
+```
+
+### Complete PDEBuilder Example
+
+```python
+from kan_mlx_physics.pde import (
+    PDEBuilder,
+    PDEResidualLoss,
+    BoundaryConditionLoss,
+    NormalizationLoss,
+    NonTrivialLoss,
+    EigenvalueLoss,
+)
+
+L = 2.0  # Box length
+E_analytic = np.pi**2 / (2 * L**2)  # ≈ 1.2337
+
+model, history = (
+    PDEBuilder("Derivative(psi, x, 2)/2 + E*psi = 0")
+    .params(E=1.0)
+    .trainable_params("E")  # Train eigenvalue via Adam
+    .domain([0, L])
+    .loss(PDEResidualLoss(weight=500, normalize=False))
+    .loss(BoundaryConditionLoss(bc_type="dirichlet", weight=1000, target=0.0))
+    .loss(NormalizationLoss(weight=100, target=1.0))
+    .loss(NonTrivialLoss(weight=200))
+    .loss(EigenvalueLoss(param_name="E", weight=3, method="trainable"))
+    .phase("initial", steps=2000, lr=0.003, n_points=1000, log_freq=400)
+    .phase("refine", steps=1000, lr=0.0015, grid_update_before=True, log_freq=200)
+    .model(width=[1, 2, 1], grid=5, k=3, grid_range=(0, L), seed=42)
+    .solve(verbose=True)
+)
+
+# Access trained eigenvalue
+E_trained = history.trainable_params["E"]
+print(f"E = {E_trained:.6f}, error = {abs(E_trained - E_analytic)/E_analytic*100:.2f}%")
+```
+
+### Equation Syntax
+
+```python
+# Standard derivative notation
+"Derivative(u, x, 2) + u = 0"      # d²u/dx² + u = 0
+
+# Multiple derivatives
+"Derivative(u, x, 2) + Derivative(u, t) = 0"  # Heat equation
+
+# With parameters
+"Derivative(psi, x, 2)/2 + E*psi = 0"  # Schrödinger
+
+# Complex expressions
+"(r2 - 2*E)*W - (hbar**2/4)*(4*r2*Derivative(W, r2, 2) + 4*Derivative(W, r2)) = 0"
+```
+
+### Legacy Solver (solve function)
+
+For simpler use cases:
+
+```python
+from kan_mlx_physics.pde import solve
+
 psi, history = solve(
     "-nabla^2 psi/2 + x^2 psi/2 = E psi",
     domain=[-5, 5],
@@ -1479,7 +1937,7 @@ Compute Moyal star product f *_theta g.
 
 ### Pre-built Physics Problems
 
-**Location:** `mlx_kan.pde.physics`
+**Location:** `kan_mlx_physics.pde.physics`
 
 ```python
 class Schrodinger:

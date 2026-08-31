@@ -28,6 +28,7 @@ from .chebyshev import ChebyshevBasis, ChebyshevSecondKindBasis
 from .hermite import HermiteBasis, WeightedHermiteBasis, ProbabilistHermiteBasis
 from .laguerre import LaguerreBasis, AssociatedLaguerreBasis, HydrogenRadialBasis
 from .legendre import LegendreBasis, AssociatedLegendreBasis, SphericalHarmonicBasis
+from .gaussian import GaussianBasis
 
 
 # Registry mapping names to classes
@@ -49,12 +50,13 @@ BASIS_REGISTRY: Dict[str, Type[Basis]] = {
     "hydrogen_radial": HydrogenRadialBasis,
     "associated_legendre": AssociatedLegendreBasis,
     "spherical_harmonic": SphericalHarmonicBasis,
+    "gaussian": GaussianBasis,
 }
 
 
 # Physics use case recommendations
 PHYSICS_RECOMMENDATIONS: Dict[str, List[str]] = {
-    "quantum_mechanics": ["hermite", "weighted_hermite", "laguerre", "hydrogen_radial"],
+    "quantum_mechanics": ["hermite", "weighted_hermite", "laguerre", "hydrogen_radial", "gaussian"],
     "spectral_methods": ["chebyshev", "legendre", "fourier"],
     "periodic": ["fourier", "complex_fourier"],
     "bounded_interval": ["chebyshev", "legendre", "bspline"],

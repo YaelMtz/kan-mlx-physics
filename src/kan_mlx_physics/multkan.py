@@ -142,6 +142,8 @@ class MultKAN(nn.Module):
         basis: Union[str, List[str]] = "bspline",
         basis_M: Union[int, List[int], None] = None,
         basis_kwargs: Union[Dict[str, Any], List[Dict[str, Any]], None] = None,
+        # Mixed-basis mult slot parameter
+        basis_per_mult_slot: Optional[List[str]] = None,
         # Descriptive aliases (take precedence if provided)
         spline_order: Optional[int] = None,
         grid_points: Optional[int] = None,
@@ -207,6 +209,15 @@ class MultKAN(nn.Module):
                 )
             basis_kwargs_list = list(basis_kwargs)
 
+        # Validate basis_per_mult_slot
+        if basis_per_mult_slot is not None:
+            if len(basis_per_mult_slot) != mult_arity:
+                raise ValueError(
+                    f"basis_per_mult_slot length ({len(basis_per_mult_slot)}) "
+                    f"must equal mult_arity ({mult_arity})"
+                )
+        self._basis_per_mult_slot = basis_per_mult_slot
+
         # Store basis config
         self._bases = bases
         self._basis_Ms = basis_Ms
@@ -224,6 +235,9 @@ class MultKAN(nn.Module):
             n_mult_out = self._width[i + 1][1]
             out_dim = n_sum_out + n_mult_out * mult_arity
 
+            # Only activate mixed-basis slots for layers that actually have mult nodes
+            layer_basis_per_slot = basis_per_mult_slot if n_mult_out > 0 else None
+
             layer = KANLayer(
                 in_dim=in_dim,
                 out_dim=out_dim,
@@ -236,6 +250,10 @@ class MultKAN(nn.Module):
                 basis=bases[i],
                 basis_M=basis_Ms[i],
                 basis_kwargs=basis_kwargs_list[i],
+                # Mixed-basis mult slots
+                basis_per_mult_slot=layer_basis_per_slot,
+                n_sum_out=n_sum_out if layer_basis_per_slot is not None else None,
+                n_mult_out=n_mult_out if layer_basis_per_slot is not None else None,
             )
             self.layers.append(layer)
 
@@ -266,11 +284,26 @@ class MultKAN(nn.Module):
         self._cache_data = None  # Last input data for re-forward
         self._save_act = True  # Whether to cache activations
 
+        # Auto-register physics symbolic functions when using physics bases
+        # This ensures that basis-appropriate symbolic functions (e.g., L_0, L_1, L_2
+        # for Laguerre, psi_0, H_0 for Hermite) are available in auto_symbolic()
+        physics_bases = {"hermite", "laguerre", "legendre", "chebyshev", "fourier"}
+        all_bases_used = list(bases)
+        if basis_per_mult_slot is not None:
+            all_bases_used.extend(basis_per_mult_slot)
+        if any(b in physics_bases for b in all_bases_used):
+            try:
+                from .physics_symbolic import register_physics_symbolic
+                register_physics_symbolic()
+            except ImportError:
+                pass  # scipy not available, skip physics functions
+
     def _parse_width(self, width: Union[List[int], List[List[int]]]) -> List[List[int]]:
         """Parse width specification into [[n_sum, n_mult], ...] format.
 
         Args:
-            width: Either [int, ...] or [[n_sum, n_mult], ...]
+            width: Either [int, ...], [[n_sum, n_mult], ...], or mixed format
+                   e.g., [2, [2, 2], 1] is valid (mixed int and [n_sum, n_mult])
 
         Returns:
             List of [n_sum, n_mult] pairs
@@ -278,18 +311,20 @@ class MultKAN(nn.Module):
         if len(width) == 0:
             raise ValueError("Width cannot be empty")
 
-        # Check if simple format (list of ints) or extended format
-        if isinstance(width[0], int):
-            # Simple format: convert to [[n, 0], ...]
-            return [[w, 0] for w in width]
-        else:
-            # Extended format: validate and return
-            parsed = []
-            for w in width:
-                if len(w) != 2:
-                    raise ValueError(f"Each width entry must be [n_sum, n_mult], got {w}")
+        # Parse each element individually to support mixed formats
+        parsed = []
+        for w in width:
+            if isinstance(w, int):
+                # Simple format: int -> [n, 0] (all sum nodes)
+                parsed.append([w, 0])
+            elif isinstance(w, (list, tuple)) and len(w) == 2:
+                # Extended format: [n_sum, n_mult]
                 parsed.append([int(w[0]), int(w[1])])
-            return parsed
+            else:
+                raise ValueError(
+                    f"Each width entry must be int or [n_sum, n_mult], got {w}"
+                )
+        return parsed
 
     @property
     def width_in(self) -> List[int]:
@@ -462,6 +497,7 @@ class MultKAN(nn.Module):
         update_grid: bool = True,
         grid_update_freq: int = 10,
         stop_grid_update_step: int = 50,
+        compile: bool = True,  # compile the fused step (first-order fits only)
         # Mixed precision
         mixed_precision: bool = False,
         # LBFGS options
@@ -608,6 +644,27 @@ class MultKAN(nn.Module):
 
         loss_and_grad = nn.value_and_grad(model=self, fn=loss_wrapper)
 
+        # Optionally compile the fused loss+grad+update step. Compilation fuses
+        # Metal kernels and removes per-step dispatch overhead (a large win for
+        # small/medium models on the GPU — see benchmark_kan_vs_pykan.py). It is
+        # only applied for first-order fitting; second-order autodiff (nested
+        # mx.grad, as in PDE residuals) is NOT compile-compatible, and grid
+        # updates change the graph, so we skip compilation when either applies.
+        use_compile = compile and not (update_grid and stop_grid_update_step > 0)
+        compiled_step = None
+        if use_compile:
+            from functools import partial
+
+            _state = [self.state, optimizer.state]
+
+            @partial(mx.compile, inputs=_state, outputs=_state)
+            def _compiled_step(bx, by):
+                loss, grads = loss_and_grad(self, bx, by)
+                optimizer.update(self, grads)
+                return loss
+
+            compiled_step = _compiled_step
+
         for step in range(steps):
             # Sample batch
             if batch_size < n_train:
@@ -618,12 +675,16 @@ class MultKAN(nn.Module):
                 batch_x = train_input
                 batch_y = train_label
 
-            # Compute loss and gradients
-            loss, grads = loss_and_grad(self, batch_x, batch_y)
+            if compiled_step is not None:
+                loss = compiled_step(batch_x, batch_y)
+                mx.eval(self.parameters(), optimizer.state)
+            else:
+                # Compute loss and gradients
+                loss, grads = loss_and_grad(self, batch_x, batch_y)
 
-            # Update parameters
-            optimizer.update(self, grads)
-            mx.eval(self.parameters(), optimizer.state)
+                # Update parameters
+                optimizer.update(self, grads)
+                mx.eval(self.parameters(), optimizer.state)
 
             # Update grid
             if update_grid and step < stop_grid_update_step:
@@ -1187,11 +1248,51 @@ class MultKAN(nn.Module):
 
     # ===== Grid and Refinement =====
 
-    def update_grid_from_samples(self, x: mx.array) -> None:
-        """Update all layer grids based on input distribution."""
+    def update_grid_from_samples(
+        self,
+        x: mx.array,
+        adaptive_weight: float = 0.5,
+        quantiles: tuple = (0.01, 0.99),
+    ) -> None:
+        """Update all layer grids based on input distribution.
+
+        Uses hybrid uniform + percentile-based grid placement.
+
+        Args:
+            x: Input samples to use for grid adaptation
+            adaptive_weight: Weight for adaptive vs uniform grid (0-1)
+            quantiles: (low, high) quantiles for range clipping
+        """
+        for layer_idx, layer in enumerate(self.layers):
+            layer.update_grid_from_samples(
+                x, adaptive_weight=adaptive_weight, quantiles=quantiles
+            )
+            x_raw = layer(x)
+            # Apply mult node reduction to get proper input shape for next layer
+            x = self._apply_mult_nodes(x_raw, layer_idx)
+
+    def extend_grid_resolution(self, factor: int = 2) -> None:
+        """Increase grid resolution by factor for all layers.
+
+        This is the KAN paper's "grid extension" trick for curriculum training:
+        1. Start with coarse grid (fast, stable)
+        2. Train to convergence
+        3. Extend grid (interpolate coefficients)
+        4. Continue training with finer resolution
+
+        Example:
+            model = MultKAN(width=[1, 10, 1], grid=3)  # Coarse
+            model.fit(dataset, steps=500)
+            model.extend_grid_resolution(factor=2)    # 3 -> 6 grid points
+            model.fit(dataset, steps=500)
+            model.extend_grid_resolution(factor=2)    # 6 -> 12 grid points
+            model.fit(dataset, steps=500)
+
+        Args:
+            factor: Multiplication factor for grid points
+        """
         for layer in self.layers:
-            layer.update_grid_from_samples(x)
-            x = layer(x)
+            layer.extend_grid_resolution(factor)
 
     def refine(self, new_grid: int) -> None:
         """Increase grid resolution for better accuracy.
@@ -1199,6 +1300,7 @@ class MultKAN(nn.Module):
         Args:
             new_grid: New number of grid intervals
         """
+        new_layers = []
         for layer in self.layers:
             old_grid = layer.grid
             grid_min = float(mx.min(old_grid))
@@ -1224,6 +1326,9 @@ class MultKAN(nn.Module):
             new_layer.scale_sp = layer.scale_sp
             new_layer.scale_base = layer.scale_base
 
+            new_layers.append(new_layer)
+
+        self.layers = new_layers  # FIX: Actually update the layers list!
         self.grid = new_grid
 
     # ===== Uncertainty Quantification =====
@@ -1311,20 +1416,72 @@ class MultKAN(nn.Module):
 
     # ===== Checkpointing =====
 
-    def saveckpt(self, path: str = "model") -> None:
-        """Save model checkpoint."""
+    # Named base functions we can round-trip through a checkpoint. Lambdas and
+    # other closures are not picklable, so we tag the common ones by identity
+    # and restore them by name on load.
+    _BASE_FUN_TABLE = {
+        "silu": nn.silu,
+        "identity": lambda x: x,
+        "zeros": lambda x: mx.zeros_like(x),
+        "tanh": mx.tanh,
+    }
+
+    def _base_fun_tag(self) -> Optional[str]:
+        """Best-effort tag for the current base_fun so it can be restored."""
+        bf = self.base_fun
+        if bf is nn.silu:
+            return "silu"
+        if bf is mx.tanh:
+            return "tanh"
+        # Detect identity / zeros closures by probing behaviour on a sample.
+        try:
+            probe = mx.array([-1.0, 0.5, 2.0])
+            out = bf(probe)
+            if mx.allclose(out, probe):
+                return "identity"
+            if mx.allclose(out, mx.zeros_like(probe)):
+                return "zeros"
+        except Exception:
+            pass
+        return None
+
+    def saveckpt(self, path: str = "model", extra: Optional[Dict[str, Any]] = None) -> None:
+        """Save a model checkpoint.
+
+        Persists the FULL architecture config (width, grid, k, basis type,
+        basis_M, basis_kwargs, mixed mult-slot bases, mult_arity, grid_range,
+        noise_scale, base_fun tag) and the complete parameter tree of every
+        layer — including basis-specific parameters (basis_shift, slot_coef_s,
+        …), not just B-spline coefficients. This lets a Laguerre / Hermite /
+        mixed-basis model round-trip faithfully.
+
+        Args:
+            path: Path prefix; writes ``{path}_params.pkl`` and
+                ``{path}_config.pkl``.
+            extra: Optional dict of extra picklable data to store alongside the
+                model (e.g. a trainer's trainable eigenvalue ``{"E": 0.5}``).
+                Retrieved via the return value of :meth:`loadckpt`.
+        """
+        from mlx.utils import tree_flatten
+
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
 
-        params = {}
+        params: Dict[str, Any] = {}
+
+        # Full per-layer parameter tree (basis params included), captured
+        # generically so any basis type is handled.
         for i, layer in enumerate(self.layers):
-            params[f"layer_{i}_coef"] = np.array(layer.coef)
-            params[f"layer_{i}_scale_sp"] = np.array(layer.scale_sp)
-            params[f"layer_{i}_scale_base"] = np.array(layer.scale_base)
-            params[f"layer_{i}_grid"] = np.array(layer.grid)
+            flat = tree_flatten(layer.trainable_parameters())
+            params[f"layer_{i}_tree"] = {k: np.array(v) for k, v in flat}
+            # grid / mask are buffers, not trainable params — save explicitly.
+            # grid is None for non-spline bases (Laguerre, Hermite, …).
+            params[f"layer_{i}_grid"] = (
+                None if layer.grid is None else np.array(layer.grid)
+            )
             params[f"layer_{i}_mask"] = np.array(layer.mask)
 
-        # Save symbolic info
+        # Symbolic info
         for i, sym in enumerate(self.symbolic_funs):
             params[f"sym_{i}_fns_name"] = sym.fns_name
             params[f"sym_{i}_affine_a"] = np.array(sym.affine_a)
@@ -1332,10 +1489,31 @@ class MultKAN(nn.Module):
             params[f"sym_{i}_affine_c"] = np.array(sym.affine_c)
             params[f"sym_{i}_affine_d"] = np.array(sym.affine_d)
 
+        base_tag = self._base_fun_tag()
+        if base_tag is None:
+            import warnings
+            warnings.warn(
+                "saveckpt: base_fun is a custom callable that cannot be "
+                "pickled; it will fall back to nn.silu on load. Re-instantiate "
+                "the model with the correct base_fun before loadckpt if this "
+                "matters.",
+                stacklevel=2,
+            )
+
         config = {
-            "width": self.width,
+            "version": 2,
+            "width": self._width_raw,
             "grid": self.grid,
             "k": self.k,
+            "bases": self._bases,
+            "basis_Ms": self._basis_Ms,
+            "basis_kwargs": self._basis_kwargs,
+            "basis_per_mult_slot": self._basis_per_mult_slot,
+            "mult_arity": self.mult_arity,
+            "grid_range": self.grid_range,
+            "noise_scale": self.noise_scale,
+            "base_fun_tag": base_tag,
+            "extra": extra,
         }
 
         with open(f"{path}_params.pkl", "wb") as f:
@@ -1343,28 +1521,70 @@ class MultKAN(nn.Module):
         with open(f"{path}_config.pkl", "wb") as f:
             pickle.dump(config, f)
 
-    def loadckpt(self, path: str = "model") -> None:
-        """Load model checkpoint."""
+    def loadckpt(self, path: str = "model") -> Optional[Dict[str, Any]]:
+        """Load a model checkpoint saved by :meth:`saveckpt`.
+
+        Rebuilds the model with the saved architecture (basis, mult structure,
+        …) if it differs from the current instance, then restores every layer's
+        parameter tree and symbolic info.
+
+        Supports both the new (version 2, full-config) format and the legacy
+        format that stored only width/grid/k and B-spline coefficients.
+
+        Returns:
+            The ``extra`` dict passed to :meth:`saveckpt` (e.g. trainable
+            params like ``{"E": 0.5}``), or ``None`` if none was saved / legacy.
+        """
+        from mlx.utils import tree_unflatten
+
         with open(f"{path}_params.pkl", "rb") as f:
             params = pickle.load(f)
         with open(f"{path}_config.pkl", "rb") as f:
             config = pickle.load(f)
 
-        if self.width != config["width"]:
-            self.__init__(
-                width=config["width"],
-                grid=config["grid"],
-                k=config["k"],
-            )
+        # ---- Legacy format (no "version" key): width/grid/k + coef only ----
+        if config.get("version") is None:
+            if self.width != config["width"]:
+                self.__init__(width=config["width"], grid=config["grid"], k=config["k"])
+            for i, layer in enumerate(self.layers):
+                layer.coef = mx.array(params[f"layer_{i}_coef"])
+                layer.scale_sp = mx.array(params[f"layer_{i}_scale_sp"])
+                layer.scale_base = mx.array(params[f"layer_{i}_scale_base"])
+                layer._grid = mx.array(params[f"layer_{i}_grid"])
+                layer._mask = mx.array(params[f"layer_{i}_mask"])
+            self._load_symbolic(params)
+            return None
+
+        # ---- Version 2: rebuild full architecture, then restore params ----
+        base_fun = self._BASE_FUN_TABLE.get(config.get("base_fun_tag") or "silu", nn.silu)
+        self.__init__(
+            width=config["width"],
+            grid=config["grid"],
+            k=config["k"],
+            noise_scale=config["noise_scale"],
+            base_fun=base_fun,
+            grid_range=config["grid_range"],
+            mult_arity=config["mult_arity"],
+            basis=config["bases"],
+            basis_M=config["basis_Ms"],
+            basis_kwargs=config["basis_kwargs"],
+            basis_per_mult_slot=config["basis_per_mult_slot"],
+        )
 
         for i, layer in enumerate(self.layers):
-            layer.coef = mx.array(params[f"layer_{i}_coef"])
-            layer.scale_sp = mx.array(params[f"layer_{i}_scale_sp"])
-            layer.scale_base = mx.array(params[f"layer_{i}_scale_base"])
-            layer._grid = mx.array(params[f"layer_{i}_grid"])
+            tree = {k: mx.array(v) for k, v in params[f"layer_{i}_tree"].items()}
+            layer.update(tree_unflatten(list(tree.items())))
+            grid_saved = params[f"layer_{i}_grid"]
+            if grid_saved is not None:
+                layer._grid = mx.array(grid_saved)
             layer._mask = mx.array(params[f"layer_{i}_mask"])
 
-        # Load symbolic info
+        self._load_symbolic(params)
+        mx.eval(self.parameters())
+        return config.get("extra")
+
+    def _load_symbolic(self, params: Dict[str, Any]) -> None:
+        """Restore symbolic-layer info from a params dict (shared by formats)."""
         for i, sym in enumerate(self.symbolic_funs):
             if f"sym_{i}_fns_name" in params:
                 sym.fns_name = params[f"sym_{i}_fns_name"]
@@ -1512,6 +1732,7 @@ class MultKAN(nn.Module):
         a_range: Tuple[float, float] = (-10, 10),
         b_range: Tuple[float, float] = (-10, 10),
         use_basis_priority: bool = True,
+        allowed_fns: Optional[set] = None,
     ) -> List[Tuple[str, float, Tuple[float, float, float, float]]]:
         """Suggest best symbolic functions for edge (l, i, j).
 
@@ -1526,6 +1747,8 @@ class MultKAN(nn.Module):
             use_basis_priority: If True, prioritize functions based on the layer's
                 basis type (e.g., sin/cos for Fourier, gaussian/psi for Hermite).
                 This gives a small bonus to physics-appropriate functions.
+            allowed_fns: If provided, only test these function names (must be in
+                SYMBOLIC_REGISTRY). When None, tests all registered functions.
         """
         layer = self.layers[l]
 
@@ -1545,12 +1768,16 @@ class MultKAN(nn.Module):
 
         # Get basis-specific priority functions
         priority_fns = set(layer.symbolic_priority) if use_basis_priority else set()
-        # Priority bonus: small boost for basis-appropriate functions
+        # Priority bonus: boost for basis-appropriate functions
         # This breaks ties in favor of physics-meaningful functions
-        priority_bonus = 0.001
+        # Using 0.02 (2%) to give meaningful preference without overwhelming fit quality
+        priority_bonus = 0.02
+
+        # Determine which functions to test
+        fn_names = allowed_fns & set(SYMBOLIC_REGISTRY) if allowed_fns is not None else SYMBOLIC_REGISTRY
 
         results = []
-        for fn_name in SYMBOLIC_REGISTRY:
+        for fn_name in fn_names:
             try:
                 a, b, c, d, r2 = fit_affine_params(x_edge, y_edge, fn_name, a_range, b_range)
                 # Apply priority bonus for basis-appropriate functions
@@ -1570,8 +1797,22 @@ class MultKAN(nn.Module):
         a_range: Tuple[float, float] = (-10, 10),
         b_range: Tuple[float, float] = (-10, 10),
         verbose: bool = True,
+        allowed_fns: Optional[set] = None,
+        basis_only: bool = False,
     ) -> Dict[Tuple[int, int, int], Tuple[str, float]]:
-        """Automatically detect and fix symbolic functions for all edges."""
+        """Automatically detect and fix symbolic functions for all edges.
+
+        Args:
+            x: Sample input data (optional).
+            r2_threshold: Minimum R² to accept a symbolic fit.
+            a_range: Search range for affine parameter a.
+            b_range: Search range for affine parameter b.
+            verbose: Whether to print progress.
+            allowed_fns: If provided, only test these function names.
+            basis_only: If True and allowed_fns is None, restrict each layer
+                to its symbolic_priority list. This filters out irrelevant
+                functions (e.g., sin/cosh when using Laguerre basis).
+        """
         fixed = {}
 
         for l in range(self.depth):
@@ -1583,14 +1824,28 @@ class MultKAN(nn.Module):
             else:
                 x_sample = x
                 for prev_l in range(l):
-                    x_sample = self.layers[prev_l](x_sample)
+                    x_sample = self._apply_mult_nodes(self.layers[prev_l](x_sample), prev_l)
+
+            # Resolve per-layer allowed functions
+            layer_allowed = allowed_fns
+            if layer_allowed is None and basis_only:
+                priority = layer.symbolic_priority
+                if priority:
+                    layer_allowed = set(priority)
 
             if verbose:
-                print(f"\nLayer {l}:")
+                if layer_allowed is not None:
+                    print(f"\nLayer {l} (testing {len(layer_allowed)} functions: {sorted(layer_allowed)}):")
+                else:
+                    print(f"\nLayer {l}:")
 
             for i in range(layer.in_dim):
                 for j in range(layer.out_dim):
-                    suggestions = self.suggest_symbolic(l, i, j, x_sample, top_k=1, a_range=a_range, b_range=b_range)
+                    suggestions = self.suggest_symbolic(
+                        l, i, j, x_sample, top_k=1,
+                        a_range=a_range, b_range=b_range,
+                        allowed_fns=layer_allowed,
+                    )
 
                     if suggestions and suggestions[0][1] >= r2_threshold:
                         fn_name, r2, (a, b, c, d) = suggestions[0]
@@ -1648,6 +1903,19 @@ class MultKAN(nn.Module):
 
                 layer_expressions.append(expr)
 
+            # Apply mult-node reduction: first n_sum stay as sums,
+            # then groups of mult_arity get joined as products.
+            n_sum = self._width[l + 1][0]
+            n_mult = self._width[l + 1][1]
+            if n_mult > 0:
+                sum_exprs = layer_expressions[:n_sum]
+                mult_inputs = layer_expressions[n_sum:]
+                mult_exprs = []
+                for m in range(n_mult):
+                    slots = mult_inputs[m * self.mult_arity:(m + 1) * self.mult_arity]
+                    mult_exprs.append("(" + " * ".join(slots) + ")")
+                layer_expressions = sum_exprs + mult_exprs
+
             expressions.append(layer_expressions)
 
             if verbose:
@@ -1700,6 +1968,15 @@ class MultKAN(nn.Module):
                 expr = terms[0] if len(terms) == 1 else " + ".join(terms)
                 layer_expressions.append(expr)
 
+            n_sum = self._width[l + 1][0]
+            n_mult = self._width[l + 1][1]
+            if n_mult > 0:
+                sum_exprs = layer_expressions[:n_sum]
+                mult_inputs = layer_expressions[n_sum:]
+                mult_exprs = ["(" + " \\cdot ".join(mult_inputs[m * self.mult_arity:(m + 1) * self.mult_arity]) + ")"
+                              for m in range(n_mult)]
+                layer_expressions = sum_exprs + mult_exprs
+
             expressions.append(layer_expressions)
 
         final_expr = expressions[-1]
@@ -1735,6 +2012,15 @@ class MultKAN(nn.Module):
 
                 expr = terms[0] if len(terms) == 1 else " + ".join(terms)
                 layer_expressions.append(expr)
+
+            n_sum = self._width[l + 1][0]
+            n_mult = self._width[l + 1][1]
+            if n_mult > 0:
+                sum_exprs = layer_expressions[:n_sum]
+                mult_inputs = layer_expressions[n_sum:]
+                mult_exprs = ["(" + " dot ".join(mult_inputs[m * self.mult_arity:(m + 1) * self.mult_arity]) + ")"
+                              for m in range(n_mult)]
+                layer_expressions = sum_exprs + mult_exprs
 
             expressions.append(layer_expressions)
 
@@ -1826,6 +2112,16 @@ class MultKAN(nn.Module):
 
                 expr = sum(terms)
                 layer_expressions.append(sympy.simplify(expr))
+
+            n_sum = self._width[l + 1][0]
+            n_mult = self._width[l + 1][1]
+            if n_mult > 0:
+                sum_exprs = layer_expressions[:n_sum]
+                mult_inputs = layer_expressions[n_sum:]
+                import functools, operator
+                mult_exprs = [functools.reduce(operator.mul, mult_inputs[m * self.mult_arity:(m + 1) * self.mult_arity])
+                              for m in range(n_mult)]
+                layer_expressions = sum_exprs + mult_exprs
 
             expressions.append(layer_expressions)
 

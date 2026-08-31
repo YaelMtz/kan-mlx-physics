@@ -11,6 +11,8 @@ Get up and running with KAN-MLX-Physics in 10 minutes.
 3. [Understanding the Architecture](#understanding-the-architecture)
 4. [Training Basics](#training-basics)
 5. [Visualization](#visualization)
+   - [Live Training Visualization](#live-training-visualization)
+   - [Exporting Training as a Video](#exporting-training-as-a-video)
 6. [Symbolic Regression](#symbolic-regression)
 7. [Next Steps](#next-steps)
 
@@ -39,11 +41,24 @@ pip install -e ".[physics]"  # Physics extras (sympy)
 pip install -e ".[all]"      # Everything
 ```
 
+### Import Options
+
+```python
+# Standard import
+from kan_mlx_physics import MultKAN, PINNTrainer, create_dataset
+
+# Shorthand alias (recommended for interactive use)
+import kanx
+from kanx import MultKAN, PINNTrainer, quick_fit
+```
+
+Both imports give you access to the same functionality. The `kanx` shorthand is convenient for notebooks and REPL sessions.
+
 ### Verify Installation
 
 ```python
 import mlx.core as mx
-from kan_mlx_physics import MultKAN
+from kanx import MultKAN  # or: from kan_mlx_physics import MultKAN
 
 model = MultKAN(width=[2, 3, 1])
 x = mx.random.uniform(shape=(10, 2))
@@ -284,7 +299,7 @@ plt.show()
 For physics problems, L-BFGS often converges faster:
 
 ```python
-from mlx_kan.functional import lbfgs_fit
+from kan_mlx_physics.functional import lbfgs_fit
 
 model, result = lbfgs_fit(
     model,
@@ -323,7 +338,7 @@ This produces:
 ### Activation Functions
 
 ```python
-from mlx_kan import plot_activations
+from kan_mlx_physics import plot_activations
 
 # Plot all activation functions in a layer
 plot_activations(model, layer_idx=0, x=dataset['train_input'])
@@ -332,9 +347,72 @@ plot_activations(model, layer_idx=0, x=dataset['train_input'])
 ### Training History
 
 ```python
-from mlx_kan import plot_training_history
+from kan_mlx_physics import plot_training_history
 
 plot_training_history(history, metric='loss')
+```
+
+### Live Training Visualization
+
+Watch the learned function evolve in real time during training using `.live_plot()` on `PDEBuilder`:
+
+```python
+import numpy as np
+from kan_mlx_physics.pde import PDEBuilder, PDEResidualLoss, NonTrivialLoss
+
+model, h = (
+    PDEBuilder("Derivative(u, x, 2) + u = 0")
+    .domain([0, 3.14])
+    .loss(PDEResidualLoss(weight=10.0))
+    .loss(NonTrivialLoss(weight=5.0))
+    .phase("train", steps=2000, lr=0.003, log_freq=100)
+    .model(width=[1, 8, 1])
+    .live_plot(
+        freq=1,                                  # Update every logged step
+        analytic_fn=lambda x: np.sin(x),        # Dashed reference line
+        var_name="x",
+        fn_name="u",
+    )
+    .solve()
+)
+```
+
+A matplotlib figure opens and refreshes automatically during training. In Jupyter notebooks the output cell updates in place via `clear_output`.
+
+**`freq` vs `log_freq`:** The plot updates at steps that satisfy both `step % log_freq == 0` (trainer logging) and `step % freq == 0` (plotter). Set `freq=1` to update on every logged step, or raise it to reduce redraw overhead.
+
+### Exporting Training as a Video
+
+Add `record=True` to save every frame as an MP4 (requires `ffmpeg`) or GIF (requires `Pillow`):
+
+```python
+.live_plot(
+    freq=1,
+    analytic_fn=lambda x: np.sin(x),
+    var_name="x",
+    fn_name="u",
+    record=True,
+    video_path="training.mp4",   # or "training.gif"
+    fps=15,
+    dpi=150,
+    writer="ffmpeg",             # "pillow" for GIF, no ffmpeg needed
+)
+```
+
+The video is written to disk when training ends. Frame count ≈ `total_steps / (log_freq × freq)`.
+
+**Dependencies:**
+
+| Output | Requires |
+|--------|----------|
+| Live display | `matplotlib` |
+| MP4 export | `ffmpeg` on PATH |
+| GIF export | `pip install Pillow` |
+
+Check ffmpeg availability:
+```bash
+which ffmpeg        # /opt/homebrew/bin/ffmpeg (typical macOS + Homebrew)
+brew install ffmpeg # install if missing
 ```
 
 ---
@@ -393,7 +471,7 @@ model.fix_symbolic(
 ### Available Symbolic Functions
 
 ```python
-from mlx_kan import list_symbolic
+from kan_mlx_physics import list_symbolic
 
 print(list_symbolic())
 # ['x', 'x^2', 'x^3', 'x^4', 'x^0.5', 'x^-1', 'x^-2',
@@ -405,7 +483,7 @@ print(list_symbolic())
 ### Physics Functions
 
 ```python
-from mlx_kan.physics_symbolic import register_physics_symbolic, list_physics_symbolic
+from kan_mlx_physics.physics_symbolic import register_physics_symbolic, list_physics_symbolic
 
 # Add 50+ physics functions
 register_physics_symbolic()
@@ -421,19 +499,65 @@ print(physics_fns['Quantum Mechanics'])
 
 ---
 
+## PDEBuilder DSL (Physics Problems)
+
+For physics problems, use the powerful PDEBuilder DSL:
+
+```python
+from kan_mlx_physics.pde import (
+    PDEBuilder,
+    PDEResidualLoss,
+    BoundaryConditionLoss,
+    NormalizationLoss,
+    NonTrivialLoss,
+    EigenvalueLoss,
+)
+
+# Solve particle in a box with trainable eigenvalue
+L = 2.0
+model, history = (
+    PDEBuilder("Derivative(psi, x, 2)/2 + E*psi = 0")
+    .params(E=1.0)
+    .trainable_params("E")  # Train E via Adam
+    .domain([0, L])
+    .loss(PDEResidualLoss(weight=500))
+    .loss(BoundaryConditionLoss(bc_type="dirichlet", weight=1000))
+    .loss(NormalizationLoss(weight=100))
+    .loss(NonTrivialLoss(weight=200))
+    .loss(EigenvalueLoss(param_name="E", method="trainable", weight=3))
+    .phase("initial", steps=2000, lr=0.003)
+    .phase("refine", steps=1000, lr=0.0015, grid_update_before=True)
+    .model(width=[1, 2, 1], grid=5, k=3)
+    .solve(verbose=True)
+)
+
+# Access trained eigenvalue
+E = history.trainable_params["E"]
+print(f"Eigenvalue: E = {E:.4f}")  # Should be ≈ 1.2337
+```
+
+**Key PDEBuilder Features:**
+- `.params()` - Define physical constants
+- `.trainable_params()` - Parameters optimized via Adam (e.g., eigenvalues)
+- `.loss()` - Add loss terms (PDE residual, BCs, normalization, etc.)
+- `.phase()` - Multi-phase training with different learning rates
+- `.model()` - Configure network architecture
+
+---
+
 ## Next Steps
 
 ### For ML Developers
 
 - Read [API Reference](API_REFERENCE.md) for full documentation
-- Explore the functional API in `mlx_kan.functional`
+- Explore the functional API in `kan_mlx_physics.functional`
 - Try multiplication nodes for learning products
 
 ### For Scientists/Physicists
 
 - Read [Physics Guide](PHYSICS_GUIDE.md) for PDE solving
 - Learn the batch-grad sum trick for efficient derivatives
-- Use the PDE DSL for quick equation solving
+- Use the PDEBuilder DSL for eigenvalue problems
 
 ### For PyKAN Users
 
@@ -476,7 +600,7 @@ uname -m  # Should show "arm64"
 
 ```python
 import mlx.core as mx
-from mlx_kan import MultKAN, create_dataset, plot_training_history
+from kan_mlx_physics import MultKAN, create_dataset, plot_training_history
 
 # 1. Data
 dataset = create_dataset(

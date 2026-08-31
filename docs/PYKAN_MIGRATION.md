@@ -278,52 +278,96 @@ set_params_list(model, params)
 
 ### Example 3: PINN for PDEs
 
-**PyKAN:**
+**PyKAN (100+ lines of manual setup):**
 ```python
 import torch
 from kan import KAN
 
 model = KAN(width=[1, 10, 1], grid=5, k=3)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+E = torch.tensor([1.0], requires_grad=True)  # Eigenvalue
 
-def u(x):
-    return model(x)
-
-def du_dx(x):
+def loss_fn(x):
     x.requires_grad_(True)
-    u_val = u(x)
-    grad = torch.autograd.grad(u_val.sum(), x, create_graph=True)[0]
-    return grad
+    u = model(x)
+    # Manual gradient computation...
+    u_xx = torch.autograd.grad(
+        torch.autograd.grad(u.sum(), x, create_graph=True)[0].sum(),
+        x, create_graph=True
+    )[0]
+    pde = 0.5 * u_xx + E * u
+    # Manual BC handling...
+    # Manual normalization...
+    # Manual eigenvalue update...
+    return total_loss
 
-# ... complex gradient handling
+# Manual training loop with grid updates between phases...
+for phase in [1, 2]:
+    for step in range(2000):
+        optimizer.zero_grad()
+        loss = loss_fn(x_train)
+        loss.backward()
+        optimizer.step()
+    # Manual grid update...
 ```
 
-**KAN-MLX-Physics:**
+**KAN-MLX-Physics with PDEBuilder (20 lines, declarative):**
 ```python
-import mlx.core as mx
-from kan_mlx_physics import MultKAN, get_params_list
-from kan_mlx_physics.pinn import make_derivative_fns
+from kan_mlx_physics.pde import (
+    PDEBuilder, PDEResidualLoss, BoundaryConditionLoss,
+    NormalizationLoss, NonTrivialLoss, EigenvalueLoss
+)
 
-model = MultKAN(width=[1, 10, 1], grid=5, k=3)
-params = get_params_list(model)
+model, history = (
+    PDEBuilder("Derivative(psi, x, 2)/2 + E*psi = 0")
+    .params(E=1.0)
+    .trainable_params("E")  # Eigenvalue trained via Adam automatically
+    .domain([0, 2.0])
+    .loss(PDEResidualLoss(weight=500))
+    .loss(BoundaryConditionLoss(bc_type="dirichlet", weight=1000))
+    .loss(NormalizationLoss(weight=100))
+    .loss(NonTrivialLoss(weight=200))
+    .loss(EigenvalueLoss(param_name="E", method="trainable", weight=3))
+    .phase("initial", steps=2000, lr=0.003)
+    .phase("refine", steps=1000, lr=0.0015, grid_update_before=True)
+    .model(width=[1, 2, 1], grid=5, k=3)
+    .solve(verbose=True)
+)
 
-# Get u, du/dx, d2u/dx2 automatically!
-u_fn, du_dx, d2u_dx2 = make_derivative_fns(model.k, model.base_fun)
-
-# Use directly in loss
-def pde_loss(params, x):
-    return mx.mean((d2u_dx2(params, x) + u_fn(params, x))**2)
+E_trained = history.trainable_params["E"]  # Eigenvalue automatically tracked
 ```
+
+### Why Use PDEBuilder?
+
+| Aspect | Manual Approach | PDEBuilder DSL |
+|--------|-----------------|----------------|
+| **Lines of code** | 100+ | 20 |
+| **Eigenvalue training** | Manual Adam loop | `.trainable_params("E")` |
+| **Loss composition** | Manual weighting | Declarative `.loss()` calls |
+| **Multi-phase training** | Manual loop restructure | `.phase()` with `grid_update_before` |
+| **Grid refinement** | Manual `update_grid_from_samples` | Built into phases |
+| **Error-prone** | Yes (gradient handling) | No (validated abstractions) |
+| **Reproducibility** | Copy-paste code | Share builder config |
+
+**Key Benefits:**
+1. **Single forward/backward pass** - Trainable params and model weights updated together efficiently
+2. **No nested autodiff issues** - DSL handles derivative computation correctly
+3. **Built-in loss terms** - 8 validated physics loss functions
+4. **Automatic grid updates** - Phase-based refinement
+5. **Result tracking** - `history.trainable_params`, `history.eigenvalue`
 
 ---
 
 ## Feature Parity
+
+### Core Features
 
 | Feature | PyKAN | KAN-MLX-Physics | Notes |
 |---------|-------|-----------------|-------|
 | Basic KAN training | Yes | Yes | Identical API |
 | LBFGS optimizer | Yes | Yes | Via scipy |
 | Grid refinement | Yes | Yes | `refine()` |
-| Pruning | Yes | Yes | `prune()` |
+| Pruning | Yes | Yes | `prune()`, `prune_edges()`, `prune_nodes()`, `prune_input()` |
 | Symbolic regression | Yes | Yes | Similar API |
 | auto_symbolic | Yes | Yes | Requires x sample |
 | Visualization | Yes | Yes | Identical output |
@@ -331,12 +375,24 @@ def pde_loss(params, x):
 | Multiplication nodes | Yes | Yes | Extended width format |
 | Model versioning | Yes | Yes | `_save_version()`/`rewind()` |
 | Uncertainty quantification | Partial | Yes | `predict_with_uncertainty()` |
-| **Functional API** | No | Yes | Pure functions for gradients |
-| **PINN utilities** | No | Yes | Batch-grad trick |
-| **PDE DSL** | No | Yes | High-level solver |
-| **Physics functions** | ~20 | 50+ | Hermite, Bessel, etc. |
-| **Moyal star product** | No | Yes | Deformation quantization |
-| **Compiled training** | No | Yes | `@mx.compile` |
+
+### KAN-MLX-Physics Exclusive Features
+
+| Feature | Description |
+|---------|-------------|
+| **6 Basis Functions** | B-spline, Fourier, Chebyshev, Hermite, Laguerre, Legendre |
+| **Per-layer Basis** | Different basis per layer (e.g., Chebyshev input, Fourier hidden) |
+| **Functional API** | Pure functions compatible with `mx.grad()`, `mx.vmap()` |
+| **PINNTrainer** | High-level trainer with dynamic LR, L-BFGS, finite differences |
+| **PDEBuilder DSL** | Fluent API for physics problems with `.params()`, `.loss()`, `.phase()` |
+| **Trainable Eigenvalues** | `.trainable_params("E")` optimizes eigenvalues via Adam |
+| **Loss Composition** | 8 built-in loss terms (PDE, BC, normalization, non-trivial, etc.) |
+| **Multi-Phase Training** | Built-in support for grid refinement between phases |
+| **Physics Functions** | 50+ symbolic functions (Hermite, Bessel, Laguerre, etc.) |
+| **Moyal Star Product** | Deformation quantization for quantum cosmology |
+| **Formula Output** | 4 formats (Unicode, LaTeX, Typst, SymPy) |
+| **Compiled Training** | `@mx.compile` for faster execution |
+| **kanx Alias** | `import kanx` shorthand |
 
 ### Features Not Yet in KAN-MLX-Physics
 
@@ -346,29 +402,43 @@ def pde_loss(params, x):
 | Heterogeneous mult_arity | Not implemented | Different arities per layer |
 | 3-level subnode attribution | Partial | 2-level supported |
 | Interactive widgets | Not implemented | Jupyter widgets |
+| Continual learning | Not implemented | Prevent catastrophic forgetting |
 
 ---
 
 ## Performance Comparison
 
-### Benchmarks on Apple M2
+### Benchmarks on Apple M3 Max
 
-| Task | PyKAN (MPS) | KAN-MLX-Physics | Speedup |
-|------|-------------|---------|---------|
-| Training 2000 steps | 16.7s | 3.7s | **4.5x** |
-| Forward pass (batch=1000) | 12ms | 3ms | **4x** |
-| Gradient computation | 45ms | 8ms | **5.6x** |
-| Symbolic regression | 2.1s | 0.9s | **2.3x** |
+Tested on M3 Max (36GB unified memory), macOS Tahoe 26.2, Python 3.11.
+Model: `width=[2, 5, 1]`, `grid=5`, `k=3`, batch size 1000.
+*Last updated: January 6, 2026*
+
+| Task | PyKAN | KAN-MLX-Physics | Speedup |
+|------|-------|-----------------|---------|
+| Forward pass | 5.8 ms | 0.8 ms | **7.0x** |
+| Gradient computation | 14.3 ms | 2.0 ms | **7.3x** |
+| Training 2000 steps | 13.4 s | 4.0 s | **3.4x** |
+
+**Note:** PyKAN uses MPS backend where available, CPU fallback for unsupported ops.
+KAN-MLX-Physics uses native Metal acceleration via MLX.
 
 ### Memory Usage
 
 | Model Size | PyKAN | KAN-MLX-Physics |
-|------------|-------|---------|
+|------------|-------|-----------------|
 | [2, 5, 1] | 1.2 MB | 0.8 MB |
 | [10, 50, 50, 1] | 45 MB | 32 MB |
 | [100, 200, 200, 1] | 890 MB | 620 MB |
 
 MLX uses unified memory - no GPU memory allocation overhead.
+
+### Why KAN-MLX-Physics is Faster
+
+1. **Unified Memory**: No CPU-GPU transfer overhead on Apple Silicon
+2. **Native Metal**: Full GPU acceleration via MLX (vs CPU-only for PyKAN on macOS)
+3. **Lazy Evaluation**: MLX's computation graph optimization
+4. **Batch-grad Trick**: Efficient per-sample gradients for PINNs
 
 ---
 

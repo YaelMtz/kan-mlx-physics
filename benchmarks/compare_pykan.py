@@ -741,6 +741,16 @@ def print_scaling_table(results: List[BenchmarkResult]) -> None:
         print(f"| {size:<18} | {params:<8} | {mlx_time:<10} | {pykan_time:<10} | {speedup:<8} |")
 
 
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder for numpy types."""
+    def default(self, obj):
+        if isinstance(obj, (np.integer, np.floating)):
+            return float(obj)
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
+
+
 def save_results_json(results: Dict[str, Any], filepath: str) -> None:
     """Save results to JSON file."""
     # Convert BenchmarkResult objects to dicts
@@ -759,7 +769,7 @@ def save_results_json(results: Dict[str, Any], filepath: str) -> None:
             output[key] = value
 
     with open(filepath, "w") as f:
-        json.dump(output, f, indent=2)
+        json.dump(output, f, indent=2, cls=NumpyEncoder)
     print(f"\nResults saved to {filepath}")
 
 

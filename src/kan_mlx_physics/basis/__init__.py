@@ -48,6 +48,7 @@ from .chebyshev import ChebyshevBasis, ChebyshevSecondKindBasis
 from .hermite import HermiteBasis, WeightedHermiteBasis, ProbabilistHermiteBasis
 from .laguerre import LaguerreBasis, AssociatedLaguerreBasis, HydrogenRadialBasis
 from .legendre import LegendreBasis, AssociatedLegendreBasis, SphericalHarmonicBasis
+from .gaussian import GaussianBasis
 
 # Registry functions
 from .registry import (
@@ -94,6 +95,9 @@ __all__ = [
     "LegendreBasis",
     "AssociatedLegendreBasis",
     "SphericalHarmonicBasis",
+
+    # Gaussian RBF
+    "GaussianBasis",
 
     # Registry
     "make_basis",

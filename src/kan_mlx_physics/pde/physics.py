@@ -13,7 +13,8 @@ from .problem import PDEProblem, Domain, BoundaryCondition, BCType
 from .operators import (
     laplacian, grad, moyal_bracket, star_product,
     wheeler_dewitt_operator, friedmann_operator, klein_gordon_curved,
-    _fd_derivative, _fd_second_derivative, _fd_mixed_derivative
+    _fd_derivative, _fd_second_derivative, _fd_mixed_derivative,
+    _ad_first_derivative, _ad_second_derivative, _ad_mixed_derivative,
 )
 
 
@@ -464,6 +465,7 @@ def MultiFieldWheelerDeWitt(
     hbar: float = 1.0,
     Lambda: float = 0.1,
     domain: Optional[Domain] = None,
+    derivative_method: str = "autodiff",
     name: str = "Multi-Field Wheeler-DeWitt"
 ) -> PDEProblem:
     """Wheeler-DeWitt equation with coupled scalar fields.
@@ -535,15 +537,16 @@ def MultiFieldWheelerDeWitt(
             # G^{ii} = a³ for scalar fields
             G_scalar = a**3
 
-            # Construct diagonal metric
-            G = mx.zeros((batch, dim, dim))
-
-            # Set diagonal elements
-            # G[:, 0, 0] = G00
-            G = G.at[:, 0, 0].set(G00)
-            for i in range(1, dim):
-                G = G.at[:, i, i].set(G_scalar)
-
+            # Construct the diagonal metric G^{AB} = diag(G00, G_scalar, ...).
+            # Build the (batch, dim) diagonal, then embed it into (batch,dim,dim)
+            # via an identity mask (MLX .at supports .add but not .set, and this
+            # is cleaner and fully differentiable).
+            diag_cols = [G00.reshape(batch, 1)]
+            for _ in range(1, dim):
+                diag_cols.append(G_scalar.reshape(batch, 1))
+            diag = mx.concatenate(diag_cols, axis=1)  # (batch, dim)
+            eye = mx.eye(dim).reshape(1, dim, dim)     # (1, dim, dim)
+            G = diag.reshape(batch, dim, 1) * eye      # broadcast → diagonal metric
             return G
 
     if potential is None:
@@ -560,85 +563,67 @@ def MultiFieldWheelerDeWitt(
             return U
 
     def superspace_kinetic(psi: Callable, q: mx.array, h: float = 1e-4) -> mx.array:
-        """Compute -ℏ² G^{AB} ∇_A ∇_B Ψ with factor ordering."""
+        """Compute -ℏ² G^{AB} ∇_A ∇_B Ψ with factor ordering.
+
+        Derivatives use exact autodiff by default (derivative_method="autodiff").
+        Finite differences (h=1e-4) are catastrophically inaccurate for the 2nd
+        derivatives here — especially against the steep exponential walls of a
+        Bianchi anisotropy potential — so autodiff is strongly preferred. Pass
+        derivative_method="finite_diff" to force the legacy FD path.
+        """
+        # Select derivative implementations (autodiff = exact, FD = legacy).
+        if derivative_method == "autodiff":
+            def d1(fn, x, i):
+                return _ad_first_derivative(fn, x, i)
+
+            def d2(fn, x, i):
+                return _ad_second_derivative(fn, x, i)
+
+            def dmix(fn, x, i, j):
+                return _ad_mixed_derivative(fn, x, i, j)
+        else:
+            def d1(fn, x, i):
+                r = _fd_derivative(fn, x, i, h)
+                return r[:, 0] if len(r.shape) > 1 else r
+
+            def d2(fn, x, i):
+                r = _fd_second_derivative(fn, x, i, h)
+                return r[:, 0] if len(r.shape) > 1 else r
+
+            def dmix(fn, x, i, j):
+                r = _fd_mixed_derivative(fn, x, i, j, h)
+                return r[:, 0] if len(r.shape) > 1 else r
+
         G = metric(q)
         batch = q.shape[0]
 
-        if factor_ordering == "naive":
-            # Simple: G^{AB} ∂_A ∂_B Ψ
+        if factor_ordering in ("naive", "weyl"):
+            # G^{AB} ∂_A ∂_B Ψ  (weyl currently uses the same symmetric form)
             kinetic = mx.zeros(batch)
-
             for A in range(dim):
                 for B in range(dim):
                     if A == B:
-                        # G^{AA} ∂²Ψ/∂q_A²
-                        d2psi = _fd_second_derivative(psi, q, A, h)
-                        if len(d2psi.shape) > 1:
-                            d2psi = d2psi[:, 0]
-                        kinetic = kinetic + G[:, A, A] * d2psi
+                        kinetic = kinetic + G[:, A, A] * d2(psi, q, A)
                     else:
-                        # G^{AB} ∂²Ψ/∂q_A∂q_B (off-diagonal)
-                        d2psi = _fd_mixed_derivative(psi, q, A, B, h)
-                        if len(d2psi.shape) > 1:
-                            d2psi = d2psi[:, 0]
-                        kinetic = kinetic + G[:, A, B] * d2psi
-
+                        kinetic = kinetic + G[:, A, B] * dmix(psi, q, A, B)
             return -hbar**2 * kinetic
 
         elif factor_ordering == "laplacian-beltrami":
             # Covariant: (1/√|G|) ∂_A (√|G| G^{AB} ∂_B Ψ)
-            # This requires computing √|det G|
-
-            # Compute metric determinant
             sqrtG = domain.get_metric_determinant(q, h)
-
             kinetic = mx.zeros(batch)
-
             for A in range(dim):
                 for B in range(dim):
-                    # Compute √|G| G^{AB} ∂_B Ψ
-                    dpsi_B = _fd_derivative(psi, q, B, h)
-                    if len(dpsi_B.shape) > 1:
-                        dpsi_B = dpsi_B[:, 0]
-
-                    flux_AB = sqrtG * G[:, A, B] * dpsi_B
-
-                    # Compute ∂_A of the flux (using finite difference)
-                    def flux_fn(qq):
-                        dpsi = _fd_derivative(psi, qq, B, h)
-                        if len(dpsi.shape) > 1:
-                            dpsi = dpsi[:, 0]
+                    # ∂_A of the flux √|G| G^{AB} ∂_B Ψ, differentiated w.r.t. q_A.
+                    def flux_fn(qq, _B=B):
+                        dpsi = d1(psi, qq, _B)
                         G_at_q = metric(qq)
                         sqrt_G = domain.get_metric_determinant(qq, h)
-                        return sqrt_G * G_at_q[:, A, B] * dpsi
+                        return sqrt_G * G_at_q[:, A, _B] * dpsi
 
-                    d_flux = _fd_derivative(flux_fn, q, A, h)
-                    if len(d_flux.shape) > 1:
-                        d_flux = d_flux[:, 0]
-
+                    d_flux = d1(flux_fn, q, A)
                     kinetic = kinetic + d_flux / (sqrtG + 1e-12)
-
             return -hbar**2 * kinetic
-
-        elif factor_ordering == "weyl":
-            # Weyl symmetric ordering: average of orderings
-            # Simplified: use naive + correction term
-            naive_kinetic = mx.zeros(batch)
-
-            for A in range(dim):
-                for B in range(dim):
-                    if A == B:
-                        d2psi = _fd_second_derivative(psi, q, A, h)
-                        if len(d2psi.shape) > 1:
-                            d2psi = d2psi[:, 0]
-                        naive_kinetic = naive_kinetic + G[:, A, A] * d2psi
-                    else:
-                        d2psi = _fd_mixed_derivative(psi, q, A, B, h)
-                        if len(d2psi.shape) > 1:
-                            d2psi = d2psi[:, 0]
-                        naive_kinetic = naive_kinetic + G[:, A, B] * d2psi
-
-            return -hbar**2 * naive_kinetic
 
         else:
             raise ValueError(f"Unknown factor ordering: {factor_ordering}")

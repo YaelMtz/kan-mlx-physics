@@ -46,7 +46,6 @@ def test_model_creation():
 
     print("✓ Model creation matches pykan API")
     print(f"  width={model.width}, depth={model.depth}, grid={model.grid}, k={model.k}")
-    return True
 
 
 def test_forward_pass():
@@ -71,7 +70,6 @@ def test_forward_pass():
 
     print("✓ Forward pass produces correct shapes")
     print(f"  Input: {x.shape} → Output: {y.shape}")
-    return True
 
 
 def test_spline_basis():
@@ -100,7 +98,6 @@ def test_spline_basis():
 
     print("✓ B-spline basis functions are correct")
     print(f"  Partition of unity: mean sum = {mean_sum:.4f}")
-    return True
 
 
 def test_training_convergence():
@@ -142,7 +139,6 @@ def test_training_convergence():
 
     print("✓ Training converges")
     print(f"  Initial loss: {initial_loss:.4f} → Final loss: {final_loss:.4f}")
-    return True
 
 
 def test_grid_update():
@@ -170,7 +166,6 @@ def test_grid_update():
 
     print("✓ Grid update from samples works")
     print(f"  Grid range changed: [{initial_grid.min():.2f}, {initial_grid.max():.2f}] → [{new_grid.min():.2f}, {new_grid.max():.2f}]")
-    return True
 
 
 def test_symbolic_suggestion():
@@ -207,7 +202,6 @@ def test_symbolic_suggestion():
 
     print("✓ Symbolic suggestion works")
     print(f"  Top suggestions: {[(s[0], f'R²={s[1]:.3f}') for s in suggestions[:3]]}")
-    return True
 
 
 def test_fix_symbolic():
@@ -239,7 +233,6 @@ def test_fix_symbolic():
 
     print("✓ Fix symbolic works")
     print(f"  Fixed edge (0,0,0) to x^2 with R² = {r2:.4f}")
-    return True
 
 
 def test_auto_symbolic():
@@ -270,7 +263,6 @@ def test_auto_symbolic():
 
     print("✓ Auto-symbolic detection works")
     print(f"  Auto-fixed {len(fixed)} edges: {list(fixed.keys())}")
-    return True
 
 
 def test_formula_extraction():
@@ -298,7 +290,6 @@ def test_formula_extraction():
     print(f"  Text:  {text_formula}")
     print(f"  LaTeX: {latex_formula}")
     print(f"  Typst: {typst_formula}")
-    return True
 
 
 def test_pruning():
@@ -325,7 +316,6 @@ def test_pruning():
 
     print("✓ Pruning works")
     print(f"  Active edges in layer 0: {int(mask.sum())}/{mask.size}")
-    return True
 
 
 def test_save_load():
@@ -362,7 +352,6 @@ def test_save_load():
 
     print("✓ Save/Load checkpoints work")
     print(f"  Prediction preserved: {y_before:.4f}")
-    return True
 
 
 def test_physics_symbolic():
@@ -398,7 +387,6 @@ def test_physics_symbolic():
     print("✓ Physics symbolic functions work")
     print(f"  Registered: {len(all_fns)} total functions")
     print(f"  Top suggestions for Gaussian: {fn_names[:5]}")
-    return True
 
 
 def test_visualization():
@@ -427,7 +415,6 @@ def test_visualization():
 
     print("✓ Visualization works")
     print("  Created: kan_structure.png, kan_network.png, activations_layer_0.png")
-    return True
 
 
 def run_all_tests():

@@ -91,11 +91,10 @@ def plot_kan(
 
     # PyKAN layout parameters
     A = 1  # Horizontal extent
-    y0 = 0.3  # Height from input to pre-mult
-    z0 = 0.1  # Height from pre-mult to post-mult
+    y0 = 0.5  # Height between layers (increased for readability)
+    z0 = 0.0
 
-    # For simple networks without mult nodes
-    # We use y0 + z0 as the total vertical spacing per layer
+    # Total vertical spacing per layer
     layer_height = y0 + z0
 
     # Compute sizing parameters (PyKAN formulas)
@@ -168,141 +167,195 @@ def plot_kan(
                     scale=scale,
                 )
 
+    # ---------------------------------------------------------------
+    # Layout helpers
+    # ---------------------------------------------------------------
+    # Node x-position given its index j within a group of n nodes
+    def node_x(j, n):
+        return 1 / (2 * n) + j / n if n > 0 else 0.5
+
+    # For layer l, compute the x-position and y-position of each node.
+    # Nodes sit at y = l * layer_height.
+    # For layers with mult nodes (n_sum + n_mult nodes total), the first
+    # n_sum are sum nodes, the remaining are mult nodes.
+    #
+    # Each edge in layer l connects:
+    #   source: node i in group l   (y = l * layer_height)
+    #   dest  : node j in group l+1 (y = (l+1) * layer_height)
+    #
+    # The activation inset sits halfway between source and dest, but
+    # horizontally grouped near the destination node so it's clear
+    # which node the edge feeds into.
+    #
+    # For mult nodes with mult_arity > 1, each mult node j has
+    # mult_arity slot edges coming in from different source nodes.
+    # We spread those insets horizontally around the mult node's x.
+
+    # Pre-compute per-layer node x-positions
+    node_xs = []
+    for l in range(neuron_depth):
+        n = width[l]
+        node_xs.append([node_x(j, n) for j in range(n)])
+
     # Set up coordinate transforms
     DC_to_FC = ax.transData.transform
     FC_to_NFC = fig.transFigure.inverted().transform
     DC_to_NFC = lambda x: FC_to_NFC(DC_to_FC(x))
 
-    # Draw structure: nodes, edges, and inset activation plots
-    for l in range(neuron_depth):
+    # ---------------------------------------------------------------
+    # Draw edges layer by layer
+    # ---------------------------------------------------------------
+    # Layout strategy:
+    #   - Source node at y_src, destination node at y_dst
+    #   - Activation insets sit in the upper third of each gap, just
+    #     below their destination node, so it's visually clear which
+    #     node each inset feeds into.
+    #   - For mult nodes with mult_arity > 1, slot insets are spread
+    #     horizontally around the ⊗ node's x-position.
+    #   - Lines: source → inset bottom, inset top → destination node.
+    inset_positions = {}  # (l, i, j) -> (x_inset, y_inset)
+
+    for l in range(neuron_depth - 1):
+        n_src = width[l]
+        n_dst = width[l + 1]
+        n_sum_dst = model.n_sum[l + 1] if hasattr(model, 'n_sum') else n_dst
+        n_mult_dst = model.n_mult[l + 1] if hasattr(model, 'n_mult') else 0
+        mult_arity = model.mult_arity if hasattr(model, 'mult_arity') else 1
+
+        y_src = l * layer_height
+        y_dst = (l + 1) * layer_height
+        gap = y_dst - y_src
+
+        # Insets sit close to their destination node.
+        # y_inset_base: vertical center of inset boxes (upper third of gap)
+        y_inset_base = y_dst - gap * 0.28
+
+        # Horizontal spread for mult slot insets (in data coords)
+        # Use a fixed spacing of ~3 inset widths so insets don't overlap
+        slot_spread = max(y1 * 3.0, 0.08 / max(n_dst, 1))
+
+        symbolic_layer = model.symbolic_funs[l] if l < len(model.symbolic_funs) else None
+
+        # --- Sum node edges ---
+        for j in range(n_sum_dst):
+            x_dst = node_xs[l + 1][j]
+            n_edges_to_j = n_src
+
+            for i in range(n_src):
+                x_src_pos = node_xs[l][i]
+
+                # Fan insets horizontally around x_dst: spread them evenly
+                if n_edges_to_j == 1:
+                    x_inset = x_dst
+                else:
+                    span = slot_spread * (n_edges_to_j - 1)
+                    x_inset = x_dst - span / 2 + i * slot_spread
+
+                y_inset = y_inset_base
+
+                is_symbolic = symbolic_layer is not None and symbolic_layer.is_symbolic(i, j)
+                color = "red" if is_symbolic else "black"
+                alpha_val = float(alpha_list[l][i, j]) if l < len(alpha_list) and alpha_list[l].shape[1] > j else 1.0
+
+                # Line from source node up to bottom of inset
+                ax.plot([x_src_pos, x_inset], [y_src, y_inset - y1],
+                        color=color, lw=2 * scale, alpha=alpha_val)
+                # Line from top of inset up to destination node
+                ax.plot([x_inset, x_dst], [y_inset + y1, y_dst],
+                        color=color, lw=2 * scale, alpha=alpha_val)
+                inset_positions[(l, i, j)] = (x_inset, y_inset)
+
+        # --- Mult node edges ---
+        # Node index for mult node m  = n_sum_dst + m
+        # Slot edge out_dim index for (m, s) = n_sum_dst + m*mult_arity + s
+        for m in range(n_mult_dst):
+            node_j = n_sum_dst + m
+            x_dst = node_xs[l + 1][node_j]
+
+            for s in range(mult_arity):
+                out_j = n_sum_dst + m * mult_arity + s
+                i = 0  # single input feeds all slots
+                x_src_pos = node_xs[l][i]
+
+                # Spread slot insets symmetrically around x_dst
+                if mult_arity == 1:
+                    x_inset = x_dst
+                else:
+                    frac = s / (mult_arity - 1) - 0.5   # -0.5 .. +0.5
+                    x_inset = x_dst + frac * slot_spread * (mult_arity - 1)
+
+                y_inset = y_inset_base
+
+                is_symbolic = symbolic_layer is not None and symbolic_layer.is_symbolic(i, out_j)
+                color = "red" if is_symbolic else "black"
+                alpha_val = float(alpha_list[l][i, out_j]) if l < len(alpha_list) and alpha_list[l].shape[1] > out_j else 1.0
+
+                ax.plot([x_src_pos, x_inset], [y_src, y_inset - y1],
+                        color=color, lw=2 * scale, alpha=alpha_val)
+                ax.plot([x_inset, x_dst], [y_inset + y1, y_dst],
+                        color=color, lw=2 * scale, alpha=alpha_val)
+                inset_positions[(l, i, out_j)] = (x_inset, y_inset)
+
+    # Draw input and output nodes (plain dots)
+    for l in [0, neuron_depth - 1]:
         n = width[l]
-
-        # Draw nodes as scatter points
         for i in range(n):
-            x_pos = 1 / (2 * n) + i / n if n > 0 else 0.5
-            y_pos = l * layer_height
-            ax.scatter(x_pos, y_pos, s=min_spacing ** 2 * 10000 * scale ** 2,
-                      color='black', zorder=5)
-
-        # Draw edges to next layer
-        if l < neuron_depth - 1:
-            n_next = width[l + 1]
-            N = n * n_next  # Total number of edges
-
-            for i in range(n):
-                for j in range(n_next):
-                    id_ = i * n_next + j
-
-                    # Check symbolic status
-                    symbolic_layer = model.symbolic_funs[l] if l < len(model.symbolic_funs) else None
-                    is_symbolic = False
-                    if symbolic_layer is not None and symbolic_layer.is_symbolic(i, j):
-                        is_symbolic = True
-
-                    # Color and alpha
-                    color = "red" if is_symbolic else "black"
-                    alpha_val = float(alpha_list[l][i, j]) if l < len(alpha_list) else 1.0
-
-                    # Source position
-                    x_src = 1 / (2 * n) + i / n if n > 0 else 0.5
-                    y_src = l * layer_height
-
-                    # Inset center position (PyKAN formula)
-                    x_inset = 1 / (2 * N) + id_ / N
-                    y_inset = l * layer_height + y0 / 2
-
-                    # Target position
-                    x_tgt = 1 / (2 * n_next) + j / n_next if n_next > 0 else 0.5
-                    y_tgt = l * layer_height + y0
-
-                    # Draw two line segments around the inset (PyKAN style)
-                    ax.plot([x_src, x_inset], [y_src, y_inset - y1],
-                           color=color, lw=2 * scale, alpha=alpha_val)
-                    ax.plot([x_inset, x_tgt], [y_inset + y1, y_tgt],
-                           color=color, lw=2 * scale, alpha=alpha_val)
-
-            # Draw connection from pre-mult to post-mult (next layer input)
-            # For simple networks, this is just vertical lines
-            for j in range(n_next):
-                x_pos = 1 / (2 * n_next) + j / n_next if n_next > 0 else 0.5
-                y_bottom = l * layer_height + y0
-                y_top = (l + 1) * layer_height
-                ax.plot([x_pos, x_pos], [y_bottom, y_top],
-                       color='black', lw=2 * scale)
+            ax.scatter(node_xs[l][i], l * layer_height,
+                       s=min_spacing ** 2 * 10000 * scale ** 2,
+                       color='black', zorder=5)
 
     # Set axis limits before placing insets
     ax.set_xlim(0, 1)
     ax.set_ylim(-0.1 * layer_height, (neuron_depth - 1 + 0.1) * layer_height)
     ax.axis('off')
 
-    # Place activation inset images
-    for l in range(neuron_depth - 1):
-        n = width[l]
-        n_next = width[l + 1]
-        N = n * n_next
+    # ---------------------------------------------------------------
+    # Place activation inset images at computed positions
+    # ---------------------------------------------------------------
+    for (l, i, j), (x_inset, y_inset) in inset_positions.items():
+        img_path = os.path.join(folder, f"sp_{l}_{i}_{j}.png")
+        if not os.path.exists(img_path):
+            continue
+        im = plt.imread(img_path)
 
-        for i in range(n):
-            for j in range(n_next):
-                id_ = i * n_next + j
+        left  = DC_to_NFC([x_inset - y1, 0])[0]
+        right = DC_to_NFC([x_inset + y1, 0])[0]
+        bot   = DC_to_NFC([0, y_inset - y1])[1]
+        top   = DC_to_NFC([0, y_inset + y1])[1]
 
-                img_path = os.path.join(folder, f"sp_{l}_{i}_{j}.png")
-                if os.path.exists(img_path):
-                    im = plt.imread(img_path)
+        alpha_val = float(alpha_list[l][i, j]) if l < len(alpha_list) and alpha_list[l].shape[1] > j else 1.0
+        newax = fig.add_axes([left, bot, right - left, top - bot])
+        newax.imshow(im, alpha=alpha_val)
+        newax.axis('off')
 
-                    # Inset position (PyKAN formula)
-                    x_inset = 1 / (2 * N) + id_ / N
-                    y_inset = l * layer_height + y0 / 2
-
-                    # Convert to normalized figure coordinates
-                    left = DC_to_NFC([x_inset - y1, 0])[0]
-                    right = DC_to_NFC([x_inset + y1, 0])[0]
-                    bottom = DC_to_NFC([0, y_inset - y1])[1]
-                    top = DC_to_NFC([0, y_inset + y1])[1]
-
-                    # Get alpha for this edge
-                    alpha_val = float(alpha_list[l][i, j]) if l < len(alpha_list) else 1.0
-
-                    # Create inset axes
-                    newax = fig.add_axes([left, bottom, right - left, top - bottom])
-                    newax.imshow(im, alpha=alpha_val)
-                    newax.axis('off')
-
-    # Place sum/mult symbols at nodes (not input layer, not output layer)
-    # These symbols go ON the nodes where edges converge
+    # ---------------------------------------------------------------
+    # Place ⊕ / ⊗ symbols at hidden and output nodes
+    # ---------------------------------------------------------------
     sum_symbol_path = os.path.join(os.path.dirname(__file__), "assets/img/sum_symbol.png")
     mult_symbol_path = os.path.join(os.path.dirname(__file__), "assets/img/mult_symbol.png")
-
-    sum_im = plt.imread(sum_symbol_path) if os.path.exists(sum_symbol_path) else None
+    sum_im  = plt.imread(sum_symbol_path)  if os.path.exists(sum_symbol_path)  else None
     mult_im = plt.imread(mult_symbol_path) if os.path.exists(mult_symbol_path) else None
 
-    # Symbol size - make it visible
-    symbol_size = y2 * 1.5  # Slightly larger than y2
+    symbol_size = y2 * 2.0
 
-    for l in range(1, neuron_depth):  # Skip input layer (l=0)
+    for l in range(1, neuron_depth):
         n = width[l]
         n_sum = model.n_sum[l] if hasattr(model, 'n_sum') else n
-        n_mult = model.n_mult[l] if hasattr(model, 'n_mult') else 0
 
         for j in range(n):
-            x_pos = 1 / (2 * n) + j / n if n > 0 else 0.5
-            y_pos = l * layer_height  # At the actual node position
-
-            # Determine if this is a sum or mult node
+            x_pos = node_xs[l][j]
+            y_pos = l * layer_height
             is_mult = j >= n_sum
-
-            if is_mult and mult_im is not None:
-                symbol_im = mult_im
-            elif sum_im is not None:
-                symbol_im = sum_im
-            else:
+            symbol_im = mult_im if is_mult else sum_im
+            if symbol_im is None:
                 continue
 
-            left = DC_to_NFC([x_pos - symbol_size, 0])[0]
+            left  = DC_to_NFC([x_pos - symbol_size, 0])[0]
             right = DC_to_NFC([x_pos + symbol_size, 0])[0]
-            bottom = DC_to_NFC([0, y_pos - symbol_size])[1]
-            top = DC_to_NFC([0, y_pos + symbol_size])[1]
+            bot   = DC_to_NFC([0, y_pos - symbol_size])[1]
+            top   = DC_to_NFC([0, y_pos + symbol_size])[1]
 
-            newax = fig.add_axes([left, bottom, right - left, top - bottom])
+            newax = fig.add_axes([left, bot, right - left, top - bot])
             newax.imshow(symbol_im)
             newax.axis('off')
 
@@ -706,3 +759,316 @@ def plot_spline_1d(
 def plot(model: "MultKAN", **kwargs) -> plt.Figure:
     """Alias for plot_kan (PyKAN compatibility)."""
     return plot_kan(model, **kwargs)
+
+
+# =============================================================================
+# LIVE PLOTTER
+# =============================================================================
+
+class LivePlotter:
+    """Live visualization of the learned function during PDE training.
+
+    Updates a matplotlib figure at regular intervals showing:
+    - The current learned function W(x) over the domain
+    - An optional analytic reference line
+    - Optionally, the KAN network graph at each phase end
+    - Optionally, export the whole training as an MP4 / GIF video
+
+    Works in both Jupyter notebooks and scripts.
+
+    Example — basic live plot::
+
+        model, h = (
+            PDEBuilder("...")
+            .domain([0, 6.0])
+            .live_plot(freq=200, analytic_fn=lambda x: np.exp(-x**2)/np.pi,
+                       var_name="r²", fn_name="W")
+            .solve()
+        )
+
+    Example — export video::
+
+        model, h = (
+            PDEBuilder("...")
+            .domain([0, 6.0])
+            .live_plot(freq=200, analytic_fn=lambda x: np.exp(-x**2)/np.pi,
+                       var_name="r²", fn_name="W",
+                       record=True, video_path="training.mp4", fps=15)
+            .solve()
+        )
+    """
+
+    def __init__(
+        self,
+        freq: int = 500,
+        x_range=None,
+        analytic_fn=None,
+        n_plot_points: int = 200,
+        show_kan: bool = False,
+        var_name: str = "x",
+        fn_name: str = "W",
+        figsize: tuple = (8, 4),
+        # Video export
+        record: bool = False,
+        video_path: str = "training.mp4",
+        fps: int = 15,
+        dpi: int = 150,
+        writer: str = "ffmpeg",  # "ffmpeg" → MP4, "pillow" → GIF
+    ):
+        self.freq = freq
+        self.x_range = x_range
+        self.analytic_fn = analytic_fn
+        self.n_plot_points = n_plot_points
+        self.show_kan = show_kan
+        self.var_name = var_name
+        self.fn_name = fn_name
+        self.figsize = figsize
+        self.record = record
+        self.video_path = video_path
+        self.fps = fps
+        self.dpi = dpi
+        self.writer = writer
+
+        self._model = None
+        self._x_np = None
+        self._x_mx = None
+        self._viz_freq = freq
+        self._fig = None
+        self._ax = None
+        self._learned_line = None
+        self._loss_text = None
+        self._attached = False
+        self._is_jupyter = self._detect_jupyter()
+
+        # Video state
+        self._frames: List[np.ndarray] = []   # RGB uint8 arrays, (H, W, 3)
+        self._frame_w: Optional[int] = None
+        self._frame_h: Optional[int] = None
+
+    def _detect_jupyter(self) -> bool:
+        try:
+            from IPython import get_ipython
+            ip = get_ipython()
+            return ip is not None and hasattr(ip, 'kernel')
+        except ImportError:
+            return False
+
+    def pre_attach(self, domain) -> None:
+        """Resolves x_range from domain if not set. Called before training."""
+        if self.x_range is None:
+            lo, hi = domain.bounds[0]
+            self.x_range = (float(lo), float(hi))
+
+        self._x_np = np.linspace(self.x_range[0], self.x_range[1], self.n_plot_points)
+        self._x_mx = mx.array(self._x_np.reshape(-1, 1).astype(np.float32))
+        self._viz_freq = self.freq
+
+    def post_attach(self, model) -> None:
+        """Creates the figure. Called once at the start of training."""
+        self._model = model
+        self._setup_figure()
+
+    def _setup_figure(self) -> None:
+        """Create figure and draw optional analytic reference."""
+        if not self._is_jupyter:
+            plt.ion()
+
+        self._fig, self._ax = plt.subplots(figsize=self.figsize)
+        self._ax.set_xlabel(self.var_name)
+        self._ax.set_ylabel(self.fn_name)
+        self._ax.set_title(f"Training: {self.fn_name}({self.var_name})")
+
+        # Analytic reference
+        if self.analytic_fn is not None:
+            y_analytic = self.analytic_fn(self._x_np)
+            self._ax.plot(self._x_np, y_analytic, 'k--', lw=1.5,
+                          label=f"{self.fn_name} analytic", alpha=0.7)
+
+        # Learned curve (placeholder at zero)
+        self._learned_line, = self._ax.plot(
+            self._x_np, np.zeros_like(self._x_np),
+            color='#2196F3', lw=2.5, label=f"{self.fn_name} learned"
+        )
+
+        # Step / loss annotation in upper-left corner
+        self._loss_text = self._ax.text(
+            0.02, 0.97, "step 0", transform=self._ax.transAxes,
+            fontsize=9, va='top', ha='left',
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.7),
+        )
+
+        self._ax.legend(loc='upper right', fontsize=9)
+        self._ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if self._is_jupyter:
+            try:
+                from IPython.display import display
+                display(self._fig)
+            except Exception:
+                pass
+        else:
+            plt.pause(0.001)  # shows window immediately on macOS
+
+        # Capture initial frame
+        if self.record:
+            self._fig.canvas.draw()
+            self._capture_frame()
+
+    def on_step(self, step: int, loss: float) -> None:
+        """Called at each logged step. Updates/records the plot every viz_freq steps."""
+        if step % self._viz_freq != 0:
+            return
+        self._update_plot(step, loss)
+
+    def _eval_model(self) -> Optional[np.ndarray]:
+        """Run a forward pass and return y as a flat numpy array, or None on error."""
+        save_act_prev = getattr(self._model, '_save_act', False)
+        self._model._save_act = False
+        try:
+            y_mx = self._model(self._x_mx)
+            mx.eval(y_mx)
+            return np.array(y_mx).flatten()
+        except Exception:
+            return None
+        finally:
+            self._model._save_act = save_act_prev
+
+    def _update_plot(self, step: int, loss: float) -> None:
+        """Forward the model, refresh the curve, optionally capture a frame."""
+        if self._model is None or self._x_mx is None:
+            return
+
+        y_np = self._eval_model()
+        if y_np is None:
+            return
+
+        self._learned_line.set_ydata(y_np)
+        self._ax.relim()
+        self._ax.autoscale_view(scalex=False)
+        self._loss_text.set_text(f"step {step:,}   loss {loss:.3e}")
+
+        # Capture frame before interactive display (so recording always works)
+        if self.record:
+            self._fig.canvas.draw()
+            self._capture_frame()
+
+        if self._is_jupyter:
+            try:
+                from IPython.display import clear_output, display
+                clear_output(wait=True)
+                display(self._fig)
+            except Exception:
+                pass
+        else:
+            # plt.pause draws + flushes events in one call; keep it short
+            plt.pause(0.001)
+
+    def _capture_frame(self) -> None:
+        """Grab the current figure as an RGB uint8 array and append to frame buffer."""
+        self._fig.canvas.draw()
+        w, h = self._fig.canvas.get_width_height()
+        # buffer_rgba() is available in all recent matplotlib versions
+        buf = np.frombuffer(self._fig.canvas.buffer_rgba(), dtype=np.uint8)
+        frame = buf.reshape(h, w, 4)[:, :, :3]  # drop alpha → RGB
+        if self._frame_w is None:
+            self._frame_w, self._frame_h = w, h
+        self._frames.append(frame.copy())
+
+    def on_phase_end(self, model, phase_name: str) -> None:
+        """Called after each phase. Optionally shows the KAN network graph."""
+        if not self.show_kan:
+            return
+        try:
+            save_act_prev = getattr(model, '_save_act', True)
+            model._save_act = True
+            model(self._x_mx)
+            mx.eval()
+            model.plot(title=f"KAN after phase: {phase_name}", display=True, save=False)
+            model._save_act = save_act_prev
+        except Exception as e:
+            print(f"[LivePlotter] KAN plot failed after phase '{phase_name}': {e}")
+
+    def close(self) -> None:
+        """Called after training ends. Saves video if recording; leaves figure open."""
+        # Capture one final frame
+        if self.record and self._fig is not None:
+            self._capture_frame()
+
+        if self.record and self._frames:
+            self._write_video()
+
+        if not self._is_jupyter:
+            plt.ioff()
+            if self._fig is not None:
+                plt.show(block=False)
+
+    def _write_video(self) -> None:
+        """Write accumulated frames to video file."""
+        n = len(self._frames)
+        path = self.video_path
+        print(f"[LivePlotter] Writing {n} frames → {path}  ({self.fps} fps) ...")
+
+        ext = path.rsplit('.', 1)[-1].lower() if '.' in path else 'mp4'
+
+        # Choose writer
+        use_writer = self.writer
+        if use_writer == "ffmpeg":
+            from matplotlib.animation import FFMpegWriter
+            try:
+                FFMpegWriter(fps=self.fps)  # test availability
+            except Exception:
+                print("[LivePlotter] ffmpeg not found; falling back to pillow (GIF).")
+                use_writer = "pillow"
+                if not path.endswith('.gif'):
+                    path = path.rsplit('.', 1)[0] + '.gif'
+
+        if use_writer == "pillow" or ext == "gif":
+            self._write_gif(path)
+        else:
+            self._write_mp4(path)
+
+    def _write_mp4(self, path: str) -> None:
+        """Write frames as MP4 using FFMpegWriter."""
+        from matplotlib.animation import FFMpegWriter
+        import matplotlib.animation as animation
+
+        # Build a fresh figure from the frames
+        h, w = self._frames[0].shape[:2]
+        fig_vid, ax_vid = plt.subplots(
+            figsize=(w / self.dpi, h / self.dpi), dpi=self.dpi
+        )
+        ax_vid.axis('off')
+        fig_vid.subplots_adjust(0, 0, 1, 1)
+        im = ax_vid.imshow(self._frames[0])
+
+        writer = FFMpegWriter(fps=self.fps, metadata={"title": "KAN training"},
+                              extra_args=['-vcodec', 'libx264', '-pix_fmt', 'yuv420p'])
+
+        with writer.saving(fig_vid, path, dpi=self.dpi):
+            for frame in self._frames:
+                im.set_data(frame)
+                writer.grab_frame()
+
+        plt.close(fig_vid)
+        print(f"[LivePlotter] Saved MP4: {path}  ({len(self._frames)} frames)")
+
+    def _write_gif(self, path: str) -> None:
+        """Write frames as GIF using Pillow."""
+        try:
+            from PIL import Image
+        except ImportError:
+            print("[LivePlotter] Pillow not installed. Run: pip install Pillow")
+            return
+
+        imgs = [Image.fromarray(f) for f in self._frames]
+        duration_ms = int(1000 / self.fps)
+        imgs[0].save(
+            path,
+            save_all=True,
+            append_images=imgs[1:],
+            duration=duration_ms,
+            loop=0,
+            optimize=False,
+        )
+        print(f"[LivePlotter] Saved GIF: {path}  ({len(self._frames)} frames, {duration_ms} ms/frame)")

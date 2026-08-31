@@ -1,14 +1,48 @@
 # KAN-MLX-Physics
 
-**Physics-First Kolmogorov-Arnold Networks for Apple Silicon**
+**A fast, MLX-native Kolmogorov–Arnold PINN toolkit for Apple Silicon.**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MLX](https://img.shields.io/badge/MLX-0.21+-orange.svg)](https://github.com/ml-explore/mlx)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-KAN-MLX-Physics is a high-performance implementation of [Kolmogorov-Arnold Networks](https://arxiv.org/abs/2404.19756) optimized for Apple Silicon. Built on [MLX](https://github.com/ml-explore/mlx), it provides specialized tools for physics-informed neural networks (PINNs) and PDE solving.
+KAN-MLX-Physics is a research-oriented implementation of [Kolmogorov–Arnold Networks](https://arxiv.org/abs/2404.19756) (KANs) for physics-informed learning, eigenvalue problems, and scientific discovery. It combines an MLX-native KAN implementation with a declarative physics/PDE interface designed around the kinds of small-to-medium scientific models for which KANs are especially interesting.
 
-> **Note:** This is an independent implementation inspired by [PyKAN](https://github.com/KindXiaoming/pykan). It is not affiliated with the existing `mlx-kan` package on PyPI.
+### Why this exists
+
+The KAN ecosystem already has excellent tools, but they target somewhat different use cases. [PyKAN](https://github.com/KindXiaoming/pykan) is the reference **PyTorch** implementation of KANs and provides a rich environment for KAN research and symbolic analysis. [KINN/PIKAN](https://arxiv.org/abs/2406.11045) established KANs as physics-informed approximators for forward and inverse PDE problems, framed as a *method* built on existing KAN implementations rather than as a standalone MLX package.
+
+KAN-MLX-Physics occupies a narrower niche:
+
+> **KAN-based scientific machine learning with an Apple-Silicon-first MLX implementation and a physics-oriented API.**
+
+The intellectual identity is not "runs on Apple Silicon" — that is the *engineering niche* — but the physics workflow it operationalizes: **basis priors, grow/prune architecture discovery, trainable-eigenvalue discovery, Hilbert–Schmidt deflation, Wigner/Moyal operators, and symbolic recovery.** On Apple Silicon, MLX's shared-memory execution model also lets CPU and GPU operations work on the same arrays without explicit host↔device transfers, which is attractive for workloads built from small networks and frequently-resampled collocation sets.
+
+> **Note:** An independent implementation inspired by [PyKAN](https://github.com/KindXiaoming/pykan); not affiliated with the `mlx-kan` package on PyPI.
+
+### Scope & limitations
+
+This is research software with an intentionally narrow scope.
+
+- **Apple Silicon is the primary supported and tested target.** The library is developed around MLX on M-series Macs. MLX itself now exposes additional backends (Linux CPU, CUDA), but portability of *this package* to them is not currently a reproducibility guarantee.
+- **Higher-order autodiff is expensive.** Physics-informed objectives with second derivatives require nested automatic differentiation; in the current implementation these terms can dominate training cost and substantially reduce steps/second versus first-order objectives.
+- **Small scientific models are the target** — KAN/PINN research, eigenvalue problems, interpretable models, symbolic recovery — not large-scale deep-learning training.
+- **Research-grade rather than production-grade.** Core KAN and physics paths are tested and actively used; pruning, broader backend validation, and some docs remain under development.
+- **Reproducibility is hardware-sensitive.** Performance should always be reported with the Apple chip, MLX version, model architecture, collocation count, derivative order, and precision.
+
+If those trade-offs match your problem — particularly KAN-based physics-informed learning on Apple hardware — this library is built specifically for that use case.
+
+### Performance
+
+Initial microbenchmarks on an **Apple M3 Max** illustrate the main computational distinction between ordinary KAN optimization and physics-informed objectives requiring higher-order derivatives.
+
+| Workload (`[1,2,1]`, 2500 collocation points) | Approx. time / step | Notes |
+|---|---:|---|
+| PDE-residual term only | ≈ 11 ms | first-order-dominated |
+| Full physics-informed step (PDE + trace + purity + BC + …) | ≈ 18 ms | complete training step |
+| Second-derivative overhead (isolated `W''` loss vs `W'`) | ≈ 2× | *not* an order-of-magnitude penalty |
+
+These numbers are **not cross-framework benchmarks** and should not be read as evidence that KAN-MLX-Physics is faster than PyKAN, PyTorch, or JAX. They are un-contended per-step timings on one M3 Max; run several trainings concurrently and per-step time rises with GPU contention. For reproducible comparisons, see the scripts and environment notes in `benchmarks/`.
 
 ---
 
@@ -18,7 +52,7 @@ KAN-MLX-Physics is a high-performance implementation of [Kolmogorov-Arnold Netwo
 |---------|-------------|
 | **Apple Silicon Optimized** | Native Metal acceleration via MLX, reduced memory overhead with unified memory |
 | **Pluggable Basis Functions** | B-splines, Fourier, Chebyshev, Hermite, Laguerre, Legendre - choose the right basis for your physics |
-| **Physics-First Design** | PDE DSL, 50+ physics symbolic functions, Moyal star product |
+| **Physics-First Design** | PDE DSL with trainable eigenvalues, 50+ physics symbolic functions, Moyal star product |
 | **Efficient Derivatives** | Batch-grad sum trick for PINN training |
 | **PyKAN Compatible** | Similar API patterns, identical visualization style |
 | **Functional API** | Pure functions for `mx.grad()`, stateless parameter handling |
@@ -42,6 +76,16 @@ pip install -e ".[all]"      # Everything
 ```
 
 **Requirements:** macOS with Apple Silicon (M1/M2/M3/M4), Python 3.10+, MLX 0.21+
+
+**Import Options:**
+```python
+# Standard import
+from kan_mlx_physics import MultKAN, PINNTrainer, create_dataset
+
+# Shorthand alias (recommended for interactive use)
+import kanx
+from kanx import MultKAN, PINNTrainer, quick_fit
+```
 
 ---
 
@@ -127,20 +171,29 @@ model = MultKAN(
 
 ## Performance
 
-### Benchmarks: KAN-MLX-Physics vs PyKAN
+Per-step timings on an Apple M3 Max are given in the
+[Performance table](#performance-apple-m3-max-mlx) above. The headline points:
 
-> **Methodology:** Side-by-side comparison on M3 Max (36GB unified memory), macOS Tahoe 26.2, Python 3.11.
-> Model: `width=[2, 5, 1]`, `grid=5`, `k=3`, batch size 1000.
-> PyKAN on CPU backend (see MPS note below), KAN-MLX-Physics on Metal via MLX.
-> See [`benchmarks/compare_pykan.py`](benchmarks/compare_pykan.py) to reproduce on your hardware.
+- **Unified memory removes the host↔device copy** that dominates small-batch PINN
+  workloads on discrete-GPU stacks — the main structural advantage of MLX here.
+- **Second-order-autodiff losses are the bottleneck** (≈191 ms/step): MLX cannot
+  yet `compile` a nested `vjp`. This is a framework limit, not a hardware one.
 
-| Benchmark | KAN-MLX-Physics | PyKAN (CPU) | Speedup |
-|-----------|-----------------|-------------|---------|
-| Forward Pass | 1.0 ms | 5.7 ms | **5.9x** |
-| Gradient Computation | 1.9 ms | 14.3 ms | **7.7x** |
-| Training (2000 steps) | 3.9 s | 13.9 s | **3.5x** |
+### Note on comparing to PyKAN
 
-> **Note on Symbolic Regression:** PyKAN's symbolic regression uses a different methodology (exhaustive library search) compared to KAN-MLX-Physics (R² fitting), making direct timing comparisons not meaningful. Both achieve accurate symbolic formula extraction.
+A meaningful head-to-head is *hardware-dependent* and easy to get wrong.
+[PyKAN](https://github.com/KindXiaoming/pykan) has no working Apple-Metal path —
+`torch.linalg.lstsq` is unimplemented on MPS (see below), so it falls back to CPU
+on a Mac. Comparing MLX-on-Metal to PyKAN-on-CPU therefore reflects *backend
+availability* on Apple hardware, not algorithmic superiority. In an
+apples-to-apples steady-state comparison the picture is a **crossover**: MLX tends
+to pull ahead on larger models and batches, while PyKAN on CPU can win for very
+small networks. We do not quote a single speedup number; run
+[`benchmarks/compare_pykan.py`](benchmarks/compare_pykan.py) on your own hardware
+and report what you see.
+
+> **Symbolic regression** is not timing-comparable: PyKAN uses exhaustive library
+> search, this package uses R² fitting against a physics-motivated vocabulary.
 
 #### PyKAN MPS Compatibility Issues
 
@@ -173,21 +226,32 @@ python benchmarks/compare_pykan.py
 ### Unique Physics Features
 
 ```python
-from kan_mlx_physics.pde import solve
-
-# Solve Schrodinger equation
-psi, history = solve(
-    "-nabla^2 psi/2 + x^2 psi/2 = E psi",
-    domain=[-5, 5],
-    params={"E": 0.5}
+from kan_mlx_physics.pde import (
+    PDEBuilder, PDEResidualLoss, BoundaryConditionLoss,
+    NormalizationLoss, NonTrivialLoss, EigenvalueLoss,
 )
 
-# Wheeler-DeWitt with Moyal deformation (quantum cosmology)
-Psi, _ = solve(
-    "H star_theta Psi = 0",
-    domain=[0.1, 5],
-    params={"theta": 0.05}
+# Solve eigenvalue problems with trainable parameters
+L = 2.0  # Box length
+model, history = (
+    PDEBuilder("Derivative(psi, x, 2)/2 + E*psi = 0")
+    .params(E=1.0)
+    .trainable_params("E")  # Train eigenvalue via Adam
+    .domain([0, L])
+    .loss(PDEResidualLoss(weight=500))
+    .loss(BoundaryConditionLoss(bc_type="dirichlet", weight=1000))
+    .loss(NormalizationLoss(weight=100))
+    .loss(NonTrivialLoss(weight=200))
+    .loss(EigenvalueLoss(param_name="E", method="trainable", weight=3))
+    .phase("initial", steps=2000, lr=0.003)
+    .phase("refine", steps=1000, lr=0.0015, grid_update_before=True)
+    .model(width=[1, 2, 1], grid=5, k=3)
+    .solve(verbose=True)
 )
+
+# Access trained eigenvalue
+E_trained = history.trainable_params["E"]
+print(f"E = {E_trained:.6f}")  # E ≈ 1.2337 (analytic: π²/8)
 ```
 
 ---
@@ -230,10 +294,12 @@ kan_mlx_physics/
 ├── pinn.py             # PINN utilities (batch-grad sum trick)
 ├── formula_render.py   # Multi-format formula output
 └── pde/                # PDE solver DSL
-    ├── dsl.py          # Equation parser
+    ├── dsl.py          # PDEBuilder fluent interface
+    ├── trainer.py      # PDETrainer with trainable params
+    ├── losses.py       # Loss terms (PDE, BC, normalization, etc.)
+    ├── compiler.py     # Equation parser
     ├── operators.py    # Differential operators, Moyal bracket
-    ├── physics.py      # Pre-built physics problems
-    └── solver.py       # Solver configuration
+    └── physics.py      # Pre-built physics problems
 ```
 
 ---
@@ -391,6 +457,31 @@ register_physics_symbolic()
 print(list_physics_symbolic())
 ```
 
+### Network Pruning
+
+Remove low-importance edges and nodes to simplify the network:
+
+```python
+# Train model first
+model.fit(dataset, steps=500)
+
+# Auto-prune: remove edges and nodes below threshold
+model.prune(threshold=0.01)
+
+# Or prune selectively:
+model.prune_edges(threshold=0.01)    # Remove weak edges only
+model.prune_nodes(threshold=0.01)    # Remove inactive hidden nodes
+model.prune_input(threshold=0.01)    # Remove unused input dimensions
+
+# Manual pruning with specific neuron IDs
+model.prune(mode="manual", active_neurons_id=[[0, 1], [0, 2, 3]])
+```
+
+Pruning benefits:
+- Reduces model complexity for interpretability
+- Speeds up inference after training
+- Reveals important input features via `prune_input()`
+
 ---
 
 ## Visualization
@@ -410,24 +501,57 @@ Produces vertical layout with:
 
 ## Comparison with PyKAN
 
-| Aspect | KAN-MLX-Physics | PyKAN |
-|--------|-----------------|-------|
-| **Backend** | MLX (Apple Silicon) | PyTorch (CUDA/CPU) |
-| **Functional API** | Native | Partial |
-| **Physics Functions** | 50+ | ~20 |
-| **Formula Output** | 4 formats | 2 formats |
+### Feature Matrix
+
+| Feature | KAN-MLX-Physics | PyKAN |
+|---------|-----------------|-------|
+| **Framework** | MLX (Apple Silicon native) | PyTorch (CUDA/CPU) |
+| **Basis Functions** | 6 types (B-spline, Fourier, Chebyshev, Hermite, Laguerre, Legendre) | B-splines only |
+| **Per-layer Basis** | Yes | No |
+| **PINN Support** | Built-in (PINNTrainer, batch-grad trick) | Manual |
+| **PDE DSL** | Yes (PDEBuilder with trainable params) | No |
+| **Trainable Eigenvalues** | Built-in (.trainable_params()) | Manual |
+| **Symbolic Functions** | 50+ (physics-focused) | ~20 |
+| **Formula Output** | 4 formats (Unicode, LaTeX, Typst, SymPy) | 2 formats |
+| **Functional API** | Full (stateless, mx.grad compatible) | Partial |
+| **Optimizers** | Adam, AdamW, SGD, L-BFGS | Adam, L-BFGS |
+| **Pruning** | Yes (`prune`, `prune_edges`, `prune_nodes`, `prune_input`) | Yes |
+| **Grid Refinement** | Yes | Yes |
 | **Platform** | macOS (Apple Silicon) | Cross-platform |
-| **Ecosystem** | Research-focused | Mature community |
 
-**Choose KAN-MLX-Physics if:** You're on Apple Silicon and need physics-informed training with efficient derivatives.
+### When to choose this library
 
-**Choose PyKAN if:** You need cross-platform support or extensive community resources.
+**Choose KAN-MLX-Physics if:**
+- You are on Apple Silicon (M1/M2/M3/M4) and want native Metal acceleration
+- You need physics-optimized bases (Hermite, Laguerre, Chebyshev, Fourier, …)
+- You are solving or *discovering* PDE eigenproblems with the physics DSL
+- You want symbolic recovery against a physics-motivated vocabulary
+
+**Choose PyKAN (or a JAX/PyTorch KAN) if:**
+- You need cross-platform / CUDA support or must reproduce on non-Apple hardware
+- Your losses are dominated by second-order derivatives at scale (see the
+  autodiff caveat above)
+- You want the larger, more mature community and ecosystem
 
 ---
 
 ## Citation
 
-If you use KAN-MLX-Physics in your research, please cite the original KAN paper:
+If you use KAN-MLX-Physics in your research, please cite **the software** (a
+`CITATION.cff` is provided, and GitHub's "Cite this repository" button reads it):
+
+```bibtex
+@software{martinez_kan_mlx_physics,
+  author  = {Mart\'inez Trejo, Yael Tonatiuh},
+  title   = {{KAN-MLX-Physics}: Physics-First Kolmogorov--Arnold Networks
+             for Apple Silicon},
+  year    = {2026},
+  url     = {https://github.com/yaelmartinez/kan-mlx-physics},
+  note    = {Version 0.1.0}
+}
+```
+
+Please also cite **the original KAN paper**:
 
 ```bibtex
 @article{liu2024kan,

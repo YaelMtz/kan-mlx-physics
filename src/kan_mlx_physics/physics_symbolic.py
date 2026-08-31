@@ -91,6 +91,21 @@ def register_physics_symbolic():
         lambda x: 1 - 2*x + x**2/2,
         "L_2(x) = 1 - 2x + \\frac{x^2}{2}", "L_2(x)", complexity=3
     )
+    register_symbolic(
+        "L_3", lambda x: 1 - 3*x + 3*x**2/2 - x**3/6,
+        lambda x: 1 - 3*x + 3*x**2/2 - x**3/6,
+        "L_3(x) = 1 - 3x + \\frac{3x^2}{2} - \\frac{x^3}{6}", "L_3(x)", complexity=4
+    )
+    register_symbolic(
+        "L_4", lambda x: 1 - 4*x + 3*x**2 - 2*x**3/3 + x**4/24,
+        lambda x: 1 - 4*x + 3*x**2 - 2*x**3/3 + x**4/24,
+        "L_4(x) = 1 - 4x + 3x^2 - \\frac{2x^3}{3} + \\frac{x^4}{24}", "L_4(x)", complexity=5
+    )
+    register_symbolic(
+        "L_5", lambda x: 1 - 5*x + 5*x**2 - 5*x**3/3 + 5*x**4/24 - x**5/120,
+        lambda x: 1 - 5*x + 5*x**2 - 5*x**3/3 + 5*x**4/24 - x**5/120,
+        "L_5(x) = 1 - 5x + 5x^2 - \\frac{5x^3}{3} + \\frac{5x^4}{24} - \\frac{x^5}{120}", "L_5(x)", complexity=6
+    )
 
     # Radial hydrogen wavefunction components R_nl
     register_symbolic(
@@ -554,6 +569,53 @@ def register_physics_symbolic():
         "\\zeta(2, x)", "zeta(2, x)", complexity=5
     )
 
+    # --- Wigner functions of the harmonic oscillator (Laguerre-Gaussian) ---
+    # W_n(s) up to the (-1)^n/pi prefactor, with s = r^2 = x^2 + p^2 the argument.
+    # These are the ACTUAL stationary Wigner eigenfunctions, W_n(s) = e^{-s} L_n(2s),
+    # registered as single primitives so the symbolic matcher can recognise the
+    # physical solution directly rather than only the polynomial or exponential
+    # factor in isolation. L_n here is the Laguerre polynomial in argument 2s.
+    def _WL(n):
+        # numpy Laguerre L_n(2 s) * exp(-s)
+        from numpy.polynomial import laguerre as _lag
+        coeffs = np.zeros(n + 1); coeffs[n] = 1.0
+        def f_np(s):
+            return _lag.lagval(2.0 * s, coeffs) * np.exp(-s)
+        return f_np
+
+    # closed forms for L_n(2s), n=0..4
+    _Lpoly = {
+        0: lambda s: np.ones_like(s),
+        1: lambda s: 1.0 - 2.0 * s,
+        2: lambda s: 1.0 - 4.0 * s + 2.0 * s ** 2,
+        3: lambda s: 1.0 - 6.0 * s + 6.0 * s ** 2 - (4.0 / 3.0) * s ** 3,
+        4: lambda s: 1.0 - 8.0 * s + 12.0 * s ** 2 - (16.0 / 3.0) * s ** 3
+                     + (2.0 / 3.0) * s ** 4,
+    }
+    _Lpoly_mx = {
+        0: lambda s: mx.ones_like(s),
+        1: lambda s: 1.0 - 2.0 * s,
+        2: lambda s: 1.0 - 4.0 * s + 2.0 * s ** 2,
+        3: lambda s: 1.0 - 6.0 * s + 6.0 * s ** 2 - (4.0 / 3.0) * s ** 3,
+        4: lambda s: 1.0 - 8.0 * s + 12.0 * s ** 2 - (16.0 / 3.0) * s ** 3
+                     + (2.0 / 3.0) * s ** 4,
+    }
+    _WL_latex = {
+        0: "e^{-s}",
+        1: "(1-2s)\\,e^{-s}",
+        2: "(1-4s+2s^2)\\,e^{-s}",
+        3: "(1-6s+6s^2-\\tfrac{4}{3}s^3)\\,e^{-s}",
+        4: "(1-8s+12s^2-\\tfrac{16}{3}s^3+\\tfrac{2}{3}s^4)\\,e^{-s}",
+    }
+    for n in range(5):
+        Lmx, Lnp = _Lpoly_mx[n], _Lpoly[n]
+        register_symbolic(
+            f"WL_{n}",
+            (lambda Lmx=Lmx: (lambda s: Lmx(s) * mx.exp(-s)))(),
+            (lambda Lnp=Lnp: (lambda s: Lnp(s) * np.exp(-s)))(),
+            _WL_latex[n], f"WL_{n}(s) = L_{n}(2s) e^(-s)", complexity=2 + n,
+        )
+
 
 def list_physics_symbolic():
     """List all physics symbolic functions available after registration."""
@@ -561,7 +623,7 @@ def list_physics_symbolic():
         "Quantum Mechanics": [
             "H_0", "H_1", "H_2", "H_3", "H_4",  # Hermite
             "psi_0", "psi_1", "psi_2",  # HO wavefunctions
-            "L_0", "L_1", "L_2",  # Laguerre
+            "L_0", "L_1", "L_2", "L_3", "L_4", "L_5",  # Laguerre
             "R_10", "R_20", "R_21",  # Hydrogen radial
             "P_0", "P_1", "P_2", "P_3", "P_4",  # Legendre
             "T_0", "T_1", "T_2", "T_3",  # Chebyshev

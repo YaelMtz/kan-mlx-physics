@@ -78,6 +78,8 @@ from .symbolic import (
     suggest_symbolic,
     validate_domain,
     score_symbolic_fit,
+    score_symbolic_aic,
+    symbolic_pipeline,
     SYMBOLIC_REGISTRY,
 )
 from .physics_symbolic import (
@@ -94,6 +96,7 @@ from .visualization import (
     plot_activations,
     plot_training_history,
     plot_spline_1d,
+    LivePlotter,
 )
 
 # =============================================================================
@@ -112,6 +115,7 @@ from .functional import (
     unflatten_params,
     lbfgs_optimize,
     lbfgs_fit,
+    FunctionalOptimizer,
 )
 
 # =============================================================================
@@ -120,11 +124,15 @@ from .functional import (
 from .pinn import (
     make_u_fn,
     make_derivative_fns,
+    make_model_derivative_fns,
+    make_finite_diff_derivative_fns,
     make_laplacian_fn,
     make_gradient_fn,
     finite_difference_laplacian,
     PINNOperators,
+    PINNTrainer,
     make_compiled_pinn_step,
+    CompileMode,
 )
 
 # =============================================================================
@@ -148,6 +156,39 @@ from .spline import B_batch, coef2curve, curve2coef, extend_grid
 from . import pde
 from . import functional
 from . import pinn
+
+# =============================================================================
+# PDE DSL (High-Level Interface)
+# =============================================================================
+from .pde import (
+    # Main entry point
+    pde as solve_pde,
+    PDEBuilder,
+    # Shortcuts
+    schrodinger,
+    wheeler_dewitt,
+    klein_gordon,
+    wave,
+    heat,
+    laplace,
+    poisson,
+    # Loss system
+    LossTerm,
+    LossComposer,
+    PDEResidualLoss,
+    BoundaryConditionLoss,
+    NormalizationLoss,
+    NonTrivialLoss,
+    EigenvalueLoss,
+    SmoothnessLoss,
+    DecayLoss,
+    AnchorLoss,
+    RegularizationLoss,
+    # Training
+    TrainingPhase,
+    TrainingSchedule,
+    PDETrainer,
+)
 
 # =============================================================================
 # Version
@@ -204,6 +245,8 @@ __all__ = [
     "suggest_symbolic",
     "validate_domain",
     "score_symbolic_fit",
+    "score_symbolic_aic",
+    "symbolic_pipeline",
     "SYMBOLIC_REGISTRY",
     # Physics symbolic
     "register_physics_symbolic",
@@ -217,6 +260,7 @@ __all__ = [
     "plot_activations",
     "plot_training_history",
     "plot_spline_1d",
+    "LivePlotter",
 
     # =========================================================================
     # Functional API (Advanced)
@@ -241,11 +285,17 @@ __all__ = [
     "pinn",
     "make_u_fn",
     "make_derivative_fns",
+    "make_model_derivative_fns",
+    "make_finite_diff_derivative_fns",
     "make_laplacian_fn",
     "make_gradient_fn",
     "finite_difference_laplacian",
     "PINNOperators",
+    "PINNTrainer",
     "make_compiled_pinn_step",
+    "CompileMode",
+    # Functional optimizer
+    "FunctionalOptimizer",
 
     # =========================================================================
     # Formula Rendering
@@ -259,6 +309,36 @@ __all__ = [
     # PDE Module
     # =========================================================================
     "pde",
+
+    # =========================================================================
+    # PDE DSL (High-Level Interface)
+    # =========================================================================
+    "solve_pde",
+    "PDEBuilder",
+    # Shortcuts
+    "schrodinger",
+    "wheeler_dewitt",
+    "klein_gordon",
+    "wave",
+    "heat",
+    "laplace",
+    "poisson",
+    # Loss system
+    "LossTerm",
+    "LossComposer",
+    "PDEResidualLoss",
+    "BoundaryConditionLoss",
+    "NormalizationLoss",
+    "NonTrivialLoss",
+    "EigenvalueLoss",
+    "SmoothnessLoss",
+    "DecayLoss",
+    "AnchorLoss",
+    "RegularizationLoss",
+    # Training
+    "TrainingPhase",
+    "TrainingSchedule",
+    "PDETrainer",
 
     # =========================================================================
     # Low-Level Spline Functions

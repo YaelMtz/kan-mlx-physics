@@ -8,9 +8,11 @@ repository-code: "https://github.com/yaelmartinez/kan-mlx-physics"
 license: MIT
 type: software
 authors:
-  - family-names: "Martinez"
-    given-names: "Yael"
+  - family-names: "Martínez Trejo"
+    given-names: "Yael Tonatiuh"
     email: "yael@yael.science"
+    affiliation: "Universidad Autónoma de San Luis Potosí (UASLP)"
+    # orcid: "https://orcid.org/0000-0000-0000-0000"  # <-- fill in your ORCID iD
 keywords:
   - kolmogorov-arnold-networks
   - machine-learning

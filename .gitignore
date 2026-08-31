@@ -4,7 +4,45 @@ __pycache__/
 build/
 dist/
 wheels/
-*.egg-info
+*.egg-info/
 
 # Virtual environments
-.venv
+.venv/
+.python-version.local
+
+# OS / editor cruft
+.DS_Store
+*.swp
+
+# Tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Agent / IDE local config
+.claude/
+
+# Training artifacts (regenerable, not source)
+checkpoints/
+model/
+test_viz/
+
+# Generated figures (regenerable from scripts)
+figures/
+figures_final/
+figures_phase1/
+figures_toy_mult/
+*.png
+*.mp4
+*.gif
+
+# Benchmark / comparison result blobs (regenerate locally; do not ship unverified numbers)
+benchmarks/*.json
+benchmark_kan_vs_pykan_results.json
+toy_comparison_results.json
+comparison_results.json
+full_comparison.log
+comparison_output.txt
+*.INVALID

@@ -61,7 +61,76 @@ PINNs solve differential equations by training neural networks to satisfy:
 2. Boundary/initial conditions at the boundary
 3. (Optional) Physical constraints (normalization, symmetry)
 
-### Basic PINN Setup
+### PINNTrainer (Recommended)
+
+The `PINNTrainer` class provides a high-level interface for PINN training:
+
+```python
+import mlx.core as mx
+from kan_mlx_physics import MultKAN, PINNTrainer
+
+# Create model
+model = MultKAN(width=[1, 10, 10, 1], grid=5, k=3)
+
+# Create trainer with finite differences (avoids nested autodiff issues)
+trainer = PINNTrainer(
+    model,
+    lr=0.01,
+    optimizer="adam",           # or "adamw", "sgd", "lbfgs"
+    derivative_method="finite_diff",  # or "autodiff"
+    compile=True,               # Use @mx.compile for speed
+)
+
+# Define PDE: u'' + u = 0 (harmonic oscillator)
+def pde_loss(x):
+    u = trainer.u(x)
+    u_xx = trainer.d2u(x)
+    pde_residual = u_xx + u
+
+    # Boundary conditions: u(0) = 0, u(pi) = 0
+    x_bc = mx.array([[0.0], [mx.pi]])
+    u_bc = trainer.u(x_bc)
+    bc_loss = mx.mean(u_bc**2)
+
+    return mx.mean(pde_residual**2) + 100 * bc_loss
+
+# Training loop
+for step in range(1000):
+    x = mx.random.uniform(low=0.0, high=mx.pi, shape=(500, 1))
+    loss = trainer.step(pde_loss, x)
+
+    if step % 100 == 0:
+        print(f"Step {step}: loss = {loss:.6f}")
+
+# Phase 2: Fine-tune with lower learning rate
+trainer.lr = 0.001
+for step in range(500):
+    x = mx.random.uniform(low=0.0, high=mx.pi, shape=(500, 1))
+    loss = trainer.step(pde_loss, x)
+```
+
+**Key PINNTrainer features:**
+- **Dynamic learning rate**: Change `trainer.lr` between training phases
+- **Multiple optimizers**: Adam, AdamW, SGD, or L-BFGS
+- **Finite differences**: Use `derivative_method="finite_diff"` to avoid nested autodiff issues
+- **Compilation**: Use `compile=True` for faster training
+- **Auto-detect loss signature**: Loss functions don't need `model` as first argument
+
+### L-BFGS for High Precision
+
+For physics problems requiring high accuracy:
+
+```python
+trainer = PINNTrainer(model, optimizer="lbfgs", derivative_method="finite_diff")
+
+# L-BFGS converges faster for physics problems
+result = trainer.fit_lbfgs(pde_loss, x_train, max_iter=100)
+print(f"Final loss: {result['loss']:.8f}")
+```
+
+### Basic PINN Setup (Low-Level API)
+
+For more control, you can use the functional API directly:
 
 ```python
 import mlx.core as mx
@@ -95,7 +164,7 @@ def loss_fn(params, x_interior):
     return pde + 100 * bc
 ```
 
-### Training Loop
+### Training Loop (Low-Level API)
 
 ```python
 from kan_mlx_physics.functional import init_adam_state, adam_update
@@ -189,11 +258,104 @@ d2u_dx2 = mx.grad(du_dx_sum, argnums=1)(params, x_batch)
 
 ---
 
-## PDE Solver DSL
+## PDEBuilder DSL (Recommended)
 
-High-level interface for solving common PDEs.
+The most powerful way to solve physics problems. Provides a declarative, chainable API with trainable eigenvalues.
 
 ### Basic Usage
+
+```python
+from kan_mlx_physics.pde import PDEBuilder, PDEResidualLoss
+
+model, history = (
+    PDEBuilder("Derivative(u, x, 2) + k*u = 0")
+    .params(k=1.0)
+    .domain([0, 3.14159])
+    .loss(PDEResidualLoss(weight=100))
+    .phase("train", steps=1000, lr=0.01)
+    .model(width=[1, 10, 1])
+    .solve()
+)
+```
+
+### Trainable Eigenvalues
+
+The key feature for eigenvalue problems: train the eigenvalue E alongside the network weights.
+
+```python
+from kan_mlx_physics.pde import (
+    PDEBuilder,
+    PDEResidualLoss,
+    BoundaryConditionLoss,
+    NormalizationLoss,
+    NonTrivialLoss,
+    EigenvalueLoss,
+)
+
+L = 2.0  # Box length
+E_analytic = np.pi**2 / (2 * L**2)  # ≈ 1.2337
+
+model, history = (
+    PDEBuilder("Derivative(psi, x, 2)/2 + E*psi = 0")
+    .params(E=1.0)                    # Initial guess
+    .trainable_params("E")            # Train E via Adam!
+    .domain([0, L])
+    .loss(PDEResidualLoss(weight=500, normalize=False))
+    .loss(BoundaryConditionLoss(bc_type="dirichlet", weight=1000, target=0.0))
+    .loss(NormalizationLoss(weight=100, target=1.0))
+    .loss(NonTrivialLoss(weight=200))
+    .loss(EigenvalueLoss(param_name="E", method="trainable", weight=3))
+    .phase("initial", steps=2000, lr=0.003, n_points=1000, log_freq=400)
+    .phase("refine", steps=1000, lr=0.0015, grid_update_before=True, log_freq=200)
+    .model(width=[1, 2, 1], grid=5, k=3, grid_range=(0, L), seed=42)
+    .solve(verbose=True)
+)
+
+# Access trained eigenvalue
+E_trained = history.trainable_params["E"]
+print(f"E = {E_trained:.6f}")  # E ≈ 1.2337 (0.00% error!)
+print(f"Error: {abs(E_trained - E_analytic)/E_analytic*100:.2f}%")
+```
+
+### Available Loss Terms
+
+| Loss | Purpose | Key Parameters |
+|------|---------|----------------|
+| `PDEResidualLoss` | PDE equation residual | `weight`, `normalize` |
+| `BoundaryConditionLoss` | Dirichlet/Neumann BCs | `bc_type`, `target` |
+| `NormalizationLoss` | ∫\|u\|² = target | `target` (default 1.0) |
+| `NonTrivialLoss` | Prevent zero solution | `scale` (default 10.0) |
+| `EigenvalueLoss` | Eigenvalue problems | `method`, `param_name` |
+| `DecayLoss` | Decay at boundaries | `threshold_ratio` |
+| `SmoothnessLoss` | Penalize oscillations | `weight` |
+| `AnchorLoss` | Fix value at point | `x0`, `target` |
+
+### Multi-Phase Training
+
+```python
+.phase("initial", steps=2000, lr=0.003, n_points=1000)
+.phase("refine", steps=1000, lr=0.0015, grid_update_before=True)
+.phase("final", steps=500, lr=0.0005)
+```
+
+### Equation Syntax
+
+```python
+# Standard derivative notation
+"Derivative(u, x, 2) + u = 0"      # d²u/dx² + u = 0
+
+# With parameters
+"Derivative(psi, x, 2)/2 + E*psi = 0"  # Schrödinger
+
+# Complex expressions (Wigner function)
+"(r2 - 2*E)*W - (hbar**2/4)*(4*r2*Derivative(W, r2, 2) + 4*Derivative(W, r2)) = 0"
+```
+
+---
+
+## Legacy PDE Solver (solve function)
+
+For simpler use cases:
 
 ```python
 from kan_mlx_physics.pde import solve
@@ -208,51 +370,6 @@ psi, history = solve(
 # Evaluate solution
 x_test = mx.linspace(-5, 5, 100).reshape(-1, 1)
 psi_vals = psi(x_test)
-```
-
-### Equation Templates
-
-Pre-defined equation types:
-
-| Template | Equation |
-|----------|----------|
-| `schrodinger` | -nabla^2 psi/2 + V(x)psi = E psi |
-| `harmonic` | Harmonic oscillator |
-| `hydrogen` | Hydrogen atom radial equation |
-| `particle-box` | Infinite square well |
-| `wave` | d^2u/dt^2 = c^2 nabla^2 u |
-| `heat` | du/dt = alpha nabla^2 u |
-| `laplace` | nabla^2 u = 0 |
-| `poisson` | nabla^2 u = f |
-| `klein-gordon` | Box phi - m^2 phi = 0 |
-| `wheeler-dewitt` | H Psi = 0 |
-
-### Custom Configuration
-
-```python
-from kan_mlx_physics.pde import solve, SolverConfig
-
-config = SolverConfig(
-    width=[1, 32, 32, 1],    # Network architecture
-    grid=10,                  # Spline resolution
-    k=3,                      # Cubic splines
-    steps=5000,               # Training steps
-    lr=0.01,                  # Learning rate
-    optimizer="Adam",         # Or "LBFGS"
-    n_interior=1000,          # Interior collocation points
-    n_boundary=200,           # Boundary points
-    sampling="sobol",         # "uniform", "sobol", or "adaptive"
-    lambda_pde=1.0,           # PDE residual weight
-    lambda_bc=10.0,           # Boundary condition weight
-    lambda_reg=0.001,         # Regularization
-)
-
-psi, history = solve(
-    "schrodinger",
-    domain=[-5, 5],
-    params={"E": 0.5, "V": lambda x: 0.5 * x**2},
-    solver_config=config,
-)
 ```
 
 ### Multi-Dimensional Domains
