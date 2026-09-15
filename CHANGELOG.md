@@ -25,6 +25,26 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
   second-order-autodiff cost, honest reproducibility boundaries.
 
 ### Fixed
+- **`predict_with_uncertainty` no longer corrupts model weights.** It drew fresh
+  random noise to "remove" the perturbation instead of subtracting the noise it had
+  added, leaving a net random walk that permanently damaged the weights over the
+  sampling loop. It now records and undoes the exact perturbation.
+- **`MultKAN(basis=None)` no longer raises.** `None` now normalizes to the default
+  B-spline (matching `KANLayer`); previously `len(basis)` raised `TypeError`.
+- **Unknown functions in a PDE equation now raise instead of silently defaulting.**
+  An unregistered `V(x)` was quietly replaced by the harmonic-oscillator potential
+  `0.5*x**2` (and `U(a)` by `a**3`), so a forgotten `.function(...)` trained against
+  the wrong physics. Register the function, or get a clear error.
+- **Residual-based adaptive sampling (RBAS) is now actually applied.** `TrainingPhase`'s
+  `use_rbas`/`rbas_weight`/`rbas_oversample` were never passed to the sampler and
+  silently no-op'd; they are now threaded through.
+- `use_gradnorm` now emits a clear warning that GradNorm balancing is not yet wired
+  into the loss composer (previously it was silently ignored).
+- Mixed-basis-slot (`basis_per_mult_slot`) layers now fail loudly on pruning
+  (`get_subset`) and warn on grid update, instead of silently dropping their per-slot
+  parameters and corrupting the model.
+- Removed a duplicate `state` property on `FunctionalOptimizer` that shadowed the
+  correct flat-tensor version with a list-of-tuples one (broke `mx.eval(opt.state)`).
 - Checkpointing now persists the full model configuration (basis type,
   `basis_kwargs`, multiplication-node structure, `noise_scale`) and the trainer's
   trainable parameters (e.g. the eigenvalue `E`); previously a non-B-spline model

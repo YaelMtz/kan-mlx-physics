@@ -784,12 +784,25 @@ class PDETrainer:
         """
         history = PhaseHistory(name=phase.name)
 
+        # GradNorm is declared on TrainingPhase but the per-step balancing is not
+        # yet wired into the loss composer; warn loudly rather than silently ignore
+        # a requested feature (see GradNormBalancer for the intended integration).
+        if getattr(phase, "use_gradnorm", False):
+            import warnings
+            warnings.warn(
+                f"phase '{phase.name}': use_gradnorm=True is not yet applied during "
+                "training (GradNorm balancing is defined but not wired into the loss "
+                "composer); training proceeds with the fixed loss weights. This flag "
+                "currently has no effect.",
+                RuntimeWarning, stacklevel=2,
+            )
+
         # Check for L-BFGS mode (negative steps)
         if phase.steps < 0:
             return self._train_lbfgs_phase(phase, -phase.steps, verbose)
 
         # Initial sampling
-        x_interior = self._sample_interior(phase.n_points)
+        x_interior = self._sample_interior(phase.n_points, use_rbas=phase.use_rbas, rbas_weight=phase.rbas_weight, rbas_oversample=phase.rbas_oversample)
         x_boundary = self._sample_boundary(phase.n_boundary)
 
         for step in range(phase.steps):
@@ -797,7 +810,7 @@ class PDETrainer:
 
             # Resample periodically
             if step > 0 and step % phase.resample_freq == 0:
-                x_interior = self._sample_interior(phase.n_points)
+                x_interior = self._sample_interior(phase.n_points, use_rbas=phase.use_rbas, rbas_weight=phase.rbas_weight, rbas_oversample=phase.rbas_oversample)
                 x_boundary = self._sample_boundary(phase.n_boundary)
 
             # Build loss context with both fixed and trainable params
@@ -878,7 +891,7 @@ class PDETrainer:
             return self._train_phase(phase, verbose)
 
         # Sample points for L-BFGS (fixed during optimization)
-        x_interior = self._sample_interior(phase.n_points)
+        x_interior = self._sample_interior(phase.n_points, use_rbas=phase.use_rbas, rbas_weight=phase.rbas_weight, rbas_oversample=phase.rbas_oversample)
         x_boundary = self._sample_boundary(phase.n_boundary)
 
         # Get model parameters

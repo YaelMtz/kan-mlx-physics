@@ -178,7 +178,10 @@ class MultKAN(nn.Module):
         self.noise_scale = noise_scale
 
         # Normalize basis parameters to per-layer lists
-        if isinstance(basis, str):
+        if basis is None:
+            # None means "use the default B-spline" (same as the KANLayer default).
+            bases = ["bspline"] * self.depth
+        elif isinstance(basis, str):
             bases = [basis] * self.depth
         else:
             if len(basis) != self.depth:
@@ -1352,16 +1355,21 @@ class MultKAN(nn.Module):
         predictions = []
 
         for _ in range(n_samples):
-            # Add noise to coefficients
+            # Add noise to coefficients, remembering the exact perturbation so we
+            # can undo it precisely (drawing fresh noise to "remove" it would leave
+            # a net random walk that permanently corrupts the weights).
+            noises = []
             for layer in self.layers:
-                layer.coef = layer.coef + mx.random.normal(layer.coef.shape) * noise_scale
+                noise = mx.random.normal(layer.coef.shape) * noise_scale
+                noises.append(noise)
+                layer.coef = layer.coef + noise
 
             pred = self(x)
             predictions.append(pred)
 
-            # Remove noise
-            for layer in self.layers:
-                layer.coef = layer.coef - mx.random.normal(layer.coef.shape) * noise_scale
+            # Remove the *same* noise that was added.
+            for layer, noise in zip(self.layers, noises):
+                layer.coef = layer.coef - noise
 
         predictions = mx.stack(predictions, axis=0)
         mean = mx.mean(predictions, axis=0)

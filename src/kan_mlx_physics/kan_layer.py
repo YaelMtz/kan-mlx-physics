@@ -562,6 +562,19 @@ class KANLayer(nn.Module):
         if self._grid is None:
             return
 
+        # For mixed-basis-slot layers, only the sum-part grid would be refit here;
+        # the per-slot B-spline grids (_slot_grid_*) are not updated, which silently
+        # desyncs the slot splines from their coefficients. Warn rather than corrupt.
+        if getattr(self, "_basis_per_mult_slot", None) is not None:
+            import warnings
+            warnings.warn(
+                "update_grid_from_samples only refits the sum-part grid on a "
+                "basis_per_mult_slot layer; the per-slot grids are left unchanged "
+                "(the slot splines may desync). Disable grid updates for mixed-slot "
+                "models, or extend this method to refit the slot grids.",
+                RuntimeWarning, stacklevel=2,
+            )
+
         # Convert to numpy for percentile computation
         x_np = np.array(x)
 
@@ -713,6 +726,18 @@ class KANLayer(nn.Module):
         Returns:
             New KANLayer with the specified subset
         """
+        # Pruning a mixed-basis-slot layer is not yet supported: the per-slot
+        # parameters (slot_coef_*, slot scales, per-slot grids) are not copied by
+        # this method, so the pruned layer would silently lose its mult-edge bases.
+        # Fail loudly rather than return a corrupt layer.
+        if getattr(self, "_basis_per_mult_slot", None) is not None:
+            raise NotImplementedError(
+                "get_subset (pruning) is not supported for layers with "
+                "basis_per_mult_slot set: the per-slot parameters would be dropped. "
+                "Prune before assigning per-slot bases, or extend get_subset to copy "
+                "the slot_coef_*/slot-grid state."
+            )
+
         # For B-splines, use num_grid; for others, use basis_M
         basis_M_arg = None if self.basis_type == "bspline" else self._num_basis_features
 

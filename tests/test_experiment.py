@@ -91,3 +91,30 @@ def test_summary_runs(capsys):
 def test_requires_at_least_one_axis():
     with pytest.raises(ValueError):
         Sweep(_tmp())
+
+
+# ---- regression tests for correctness fixes from the library audit ----
+
+def test_predict_with_uncertainty_does_not_corrupt_weights():
+    """UQ must restore weights exactly (previously drew mismatched noise)."""
+    import mlx.core as mx
+    from kan_mlx_physics import MultKAN
+    m = MultKAN(width=[2, 5, 1], grid=8, k=3, seed=0)
+    if not hasattr(m, "predict_with_uncertainty"):
+        import pytest; pytest.skip("no predict_with_uncertainty")
+    before = [mx.array(l.coef) for l in m.layers]
+    m.predict_with_uncertainty(mx.zeros((4, 2)), n_samples=50, noise_scale=0.1)
+    drift = max(float(mx.max(mx.abs(mx.array(l.coef) - b)))
+                for l, b in zip(m.layers, before))
+    assert drift < 1e-5, f"weights drifted by {drift}"
+
+
+def test_unknown_potential_raises_not_silent_default():
+    """An unregistered function in the equation must error, not silently become
+    0.5*x**2 (which would solve a different problem)."""
+    import pytest
+    from kan_mlx_physics.pde import PDEBuilder
+    with pytest.raises((ValueError, Exception)):
+        (PDEBuilder("Derivative(u, x, 2) + Vunreg(x)*u = 0")
+         .params().domain([0, 1])
+         .model(width=[1, 3, 1]).solve(verbose=False))

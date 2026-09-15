@@ -142,3 +142,13 @@ class TestNoiseScaleForwarding:
 
         model = _create_model(dict(_BASE_CFG), _make_domain(), _make_analysis())
         assert model.noise_scale == pytest.approx(0.1)
+
+
+def test_basis_none_defaults_to_bspline():
+    """Regression: MultKAN(basis=None) must not crash — None means default B-spline.
+    (Previously `len(basis)` raised TypeError on None.)"""
+    import mlx.core as mx
+    from kan_mlx_physics import MultKAN
+    m = MultKAN(width=[2, 5, 1], basis=None, grid=8, k=3)
+    y = m(mx.zeros((4, 2)))
+    assert y.shape == (4, 1)

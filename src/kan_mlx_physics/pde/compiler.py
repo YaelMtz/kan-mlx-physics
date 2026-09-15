@@ -388,20 +388,18 @@ class CompiledResidual:
                     warnings.warn(f"Custom function '{name}' failed: {e}")
                     return mx.zeros(x.shape[0])
 
-            # Check for built-in known functions
-            if name == 'v' and len(args) == 1:
-                # Potential function V(x) - return x² for harmonic oscillator default
-                return 0.5 * args[0] ** 2
-            elif name == 'u' and len(args) == 1:
-                # U(a) potential - return default cosmological potential
-                a = args[0]
-                return a ** 3  # Simple potential
-
-            # Unknown function - return zero with warning
-            import warnings
-            warnings.warn(f"Unknown function '{expr.name}' in equation. "
-                         f"Use .function('{expr.name}', fn) to register it.")
-            return mx.zeros(x.shape[0])
+            # Unknown function: FAIL LOUDLY. Previously an unregistered V(x) was
+            # silently replaced by the harmonic-oscillator potential 0.5*x**2 (and
+            # U(a) by a**3), so a user solving a different potential trained against
+            # the wrong physics with only a warning. Registering the function is
+            # mandatory — an unknown callable in the equation is an error, not a
+            # default. (Presets that *want* a harmonic default should register it
+            # explicitly via .function('V', lambda x: 0.5*x**2).)
+            raise ValueError(
+                f"Unknown function '{expr.name}' in the equation. Register it with "
+                f".function('{expr.name}', fn) before solving. Refusing to substitute "
+                f"a default potential, which would silently solve a different problem."
+            )
 
         # Star product (placeholder - full implementation in operators)
         if isinstance(expr, StarProduct):

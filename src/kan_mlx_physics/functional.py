@@ -704,15 +704,6 @@ class FunctionalOptimizer:
         self.velocity = new_velocity
         return new_params
 
-    @property
-    def state(self):
-        """Return optimizer state for mx.eval()."""
-        if self.optimizer_type in ("adam", "adamw"):
-            return self.m + self.v
-        elif self.optimizer_type == "sgd":
-            return self.velocity
-        return []
-
 
 def lbfgs_fit(
     model,
