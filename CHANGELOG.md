@@ -6,6 +6,21 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- `kan_mlx_physics.viz` — two declarative visualization surfaces for two jobs:
+  - **`viz.paper`** — publication figures: `paper.use()` applies a colorblind-safe
+    (Okabe–Ito), serif/Computer-Modern, vector-PDF style; `paper.vs_analytic(...)`,
+    `paper.wigner_2d(...)`, and `paper.convergence(...)` each render a common physics
+    figure in one chained call (`.caption(...).save("fig.pdf")`). The Wigner surface
+    uses a **diverging colormap centered at zero** — a Wigner function is a
+    quasi-probability, so its sign is physical and must not be hidden by a sequential
+    or rainbow map.
+  - **`viz.live`** — a real-time `rich` terminal dashboard for experimenting:
+    `live.monitor(analytic=W, total_steps=N)` returns a *zero-weight* loss hook that
+    renders per-term loss, the trainable eigenvalue, and a live blind L2 vs an
+    analytic reference while the solve runs. Headless/SSH-safe; degrades to a
+    one-line print if `rich` is unavailable.
+
 ## [0.2.0] - 2026-09-14
 
 ### Added

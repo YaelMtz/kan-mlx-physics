@@ -155,6 +155,7 @@ from .spline import B_batch, coef2curve, curve2coef, extend_grid
 # Submodules
 # =============================================================================
 from . import pde
+from . import viz
 from . import functional
 from . import pinn
 
@@ -197,6 +198,7 @@ from .pde import (
 __version__ = "0.2.0"
 __all__ = [
     "Sweep",
+    "viz",
     # =========================================================================
     # Core Model
     # =========================================================================
