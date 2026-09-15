@@ -7,6 +7,13 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- Operator-identity supervision: a family of data-free physics losses whose target
+  values are fixed by universal operator identities rather than by an (unknown)
+  analytic solution — pure-state purity (`Tr ρ² = 1`), vanishing quantum energy
+  variance (`⟨H²⟩ − ⟨H⟩² = 0`, via the exact Moyal relation for polynomial `H`), and
+  Hilbert–Schmidt deflation (`Tr(ρₙρₘ) = 0`) for progressive excited-state recovery.
+  These compose with the trace and PDE-residual terms to enable eigenstate discovery
+  in phase space with no supervised target.
 - Wigner–Laguerre–Gaussian symbolic primitives `WL_0`…`WL_4` (`e^{-s} L_n(2s)`),
   enabling native-family symbolic identification of harmonic-oscillator Wigner
   eigenfunctions.

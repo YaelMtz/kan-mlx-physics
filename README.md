@@ -254,6 +254,27 @@ E_trained = history.trainable_params["E"]
 print(f"E = {E_trained:.6f}")  # E ≈ 1.2337 (analytic: π²/8)
 ```
 
+#### Operator-identity supervision (data-free discovery)
+
+For phase-space (Wigner/Moyal) eigenvalue problems, the library supports **data-free
+supervision by operator identities** — physics losses whose target values are fixed by
+universal quantum-mechanical law rather than by the (unknown) analytic solution. This
+lets you *discover* an eigenstate from the star-genvalue equation alone, with no
+supervised target:
+
+- **Trace** `Tr ρ = 1` — normalization.
+- **Purity** `Tr ρ² = 1` — the pure-state condition (`2π² ∫ W² ds = 1` in phase space).
+- **Energy variance** `⟨H²⟩ − ⟨H⟩² = 0` — the defining signature of an energy
+  eigenstate (via the exact Moyal relation `H ⋆ H = H² − ℏ²/4` for a quadratic `H`).
+- **Hilbert–Schmidt deflation** `Tr(ρₙρₘ) = 0` — orthogonality to already-recovered
+  lower states, for progressive excited-state extraction.
+
+Each is a subclass of `LossTerm`, composes with the PDE residual and decay/boundary
+terms, and injects **no** information about the analytic solution — so the same
+machinery that solves the harmonic-oscillator Wigner function extends to problems
+where the closed form is unknown or exotic (e.g. Meijer G-function phase-space
+distributions in anisotropic quantum cosmology).
+
 ---
 
 ## Architecture
