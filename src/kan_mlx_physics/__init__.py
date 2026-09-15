@@ -43,6 +43,7 @@ from .kan_layer import KANLayer
 # Convenience API (High-Level)
 # =============================================================================
 from .convenience import quick_fit, auto_formula, visualize, fit_and_extract
+from .experiment import Sweep
 from .presets import from_preset, list_presets, describe_preset, get_preset_config
 from .utils import (
     create_dataset,
@@ -195,6 +196,7 @@ from .pde import (
 # =============================================================================
 __version__ = "0.1.0"
 __all__ = [
+    "Sweep",
     # =========================================================================
     # Core Model
     # =========================================================================

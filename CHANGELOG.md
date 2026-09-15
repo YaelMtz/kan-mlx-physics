@@ -7,6 +7,10 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- `Sweep` — a minimal, resumable multi-seed experiment helper. A full parameter ×
+  seed grid with resume-on-restart, JSONL logging, and a grouped median±std summary
+  now takes ~5 lines instead of ~60 of hand-written boilerplate:
+  `Sweep(path, **axes)` → `@sweep.run` cell function → `sweep.summary(group_by, show)`.
 - Operator-identity supervision: a family of data-free physics losses whose target
   values are fixed by universal operator identities rather than by an (unknown)
   analytic solution — pure-state purity (`Tr ρ² = 1`), vanishing quantum energy
