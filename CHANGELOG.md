@@ -6,6 +6,8 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-14
+
 ### Added
 - **`solve_spectrum(...)` — eigenstate discovery as a flagship workflow.** Sequential,
   deflation-based recovery of a whole spectrum from a star-genvalue / eigenvalue PDE

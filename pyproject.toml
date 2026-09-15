@@ -1,6 +1,6 @@
 [project]
 name = "kan-mlx-physics"
-version = "0.2.0"
+version = "0.3.0"
 description = "Physics-first Kolmogorov-Arnold Networks for Apple Silicon"
 readme = "README.md"
 license = "MIT"
