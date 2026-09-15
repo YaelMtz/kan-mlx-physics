@@ -29,6 +29,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Callable, Any, Tuple, Set, Union
+import math
 import numpy as np
 
 import mlx.core as mx
@@ -326,6 +327,53 @@ class NormalizationLoss(LossTerm):
 
         integral = mx.mean(u ** 2) * volume
         return (integral - self.target) ** 2
+
+
+class TraceLoss(LossTerm):
+    """Trace normalization for a Wigner function: (∫W dμ − target)².
+
+    The phase-space image of ``Tr ρ = 1``. For the radial harmonic-oscillator Wigner
+    function the trace target is ``1/π`` (∫W dr² = 1/π), so ``target=1/np.pi``.
+    Operator-identity supervision: the target is fixed by a universal identity, not
+    by the unknown solution.
+    """
+
+    def __init__(self, weight: float = 800.0, target: float = 1.0, **kwargs):
+        super().__init__(weight, **kwargs)
+        self.target = target
+
+    def compute(self, ctx: LossContext) -> mx.array:
+        if ctx.x_interior is None:
+            return mx.array(0.0)
+        u = ctx.get_u(ctx.x_interior)
+        if len(u.shape) > 1:
+            u = mx.squeeze(u, axis=-1)
+        volume = _get_domain_volume(ctx.domain)
+        return (mx.mean(u) * volume - self.target) ** 2
+
+
+class PurityLoss(LossTerm):
+    """Pure-state purity for a Wigner function: (2π²∫W² dμ − 1)².
+
+    The phase-space image of ``Tr ρ² = 1`` (a pure state). Written with the constant
+    folded into ``target``: enforces ``∫W² dμ = target``. For the radial HO Wigner
+    function ``target = 1/(2π²)`` so that ``2π² ∫W² = 1``. Data-free — the target is
+    the universal pure-state value, not the analytic W_n.
+    """
+
+    def __init__(self, weight: float = 400.0,
+                 target: float = 1.0 / (2.0 * math.pi ** 2), **kwargs):
+        super().__init__(weight, **kwargs)
+        self.target = target
+
+    def compute(self, ctx: LossContext) -> mx.array:
+        if ctx.x_interior is None:
+            return mx.array(0.0)
+        u = ctx.get_u(ctx.x_interior)
+        if len(u.shape) > 1:
+            u = mx.squeeze(u, axis=-1)
+        volume = _get_domain_volume(ctx.domain)
+        return (mx.mean(u ** 2) * volume / self.target - 1.0) ** 2
 
 
 class NonTrivialLoss(LossTerm):

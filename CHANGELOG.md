@@ -7,6 +7,21 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- **`solve_spectrum(...)` — eigenstate discovery as a flagship workflow.** Sequential,
+  deflation-based recovery of a whole spectrum from a star-genvalue / eigenvalue PDE
+  with no supervised target: each excited state is found while enforcing
+  Hilbert–Schmidt orthogonality (`Tr(ρₙρₘ)=0`) to the already-recovered lower states.
+  Returns a `Spectrum` with `.eigenvalues`, `.states`, `.residuals`, `.overlaps()`
+  (Gram matrix) and `.table()`. Ships a graph-stable `DeflationLoss` (frozen priors
+  pre-tabulated on a fixed grid).
+- **`compare_priors(...)` + `Prior` — functional inductive priors as a first-class
+  concept.** Run the *same* physics problem under several named priors (basis +
+  config) across seeds and get the selection/accuracy table (`P_select`, L2|correct)
+  that a basis-prior study needs — the methodology of cross-representation
+  inductive-bias research, in one call. Resumable via `Sweep`.
+- **Operator-identity loss terms promoted to the library:** `TraceLoss` (`Tr ρ = 1`)
+  and `PurityLoss` (`Tr ρ² = 1`), matching the operator-identity supervision described
+  below; previously these lived only in experiment scripts.
 - `kan_mlx_physics.viz` — two declarative visualization surfaces for two jobs:
   - **`viz.paper`** — publication figures: `paper.use()` applies a colorblind-safe
     (Okabe–Ito), serif/Computer-Modern, vector-PDF style; `paper.vs_analytic(...)`,

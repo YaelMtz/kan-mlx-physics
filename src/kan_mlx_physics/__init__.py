@@ -190,6 +190,15 @@ from .pde import (
     TrainingPhase,
     TrainingSchedule,
     PDETrainer,
+    # Spectral discovery + operator-identity losses
+    solve_spectrum,
+    Spectrum,
+    DeflationLoss,
+    TraceLoss,
+    PurityLoss,
+    Prior,
+    compare_priors,
+    PriorComparison,
 )
 
 # =============================================================================

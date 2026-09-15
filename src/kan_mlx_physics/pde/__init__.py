@@ -120,7 +120,11 @@ from .compiler import (
 # =============================================================================
 # Loss System
 # =============================================================================
+from .spectrum import solve_spectrum, Spectrum, DeflationLoss
+from .priors import Prior, compare_priors, PriorComparison
 from .losses import (
+    TraceLoss,
+    PurityLoss,
     # Context
     LossContext,
     # Base class
@@ -234,6 +238,14 @@ from .symbolic_extraction import (
 )
 
 __all__ = [
+    "PriorComparison",
+    "compare_priors",
+    "Prior",
+    "PurityLoss",
+    "TraceLoss",
+    "DeflationLoss",
+    "Spectrum",
+    "solve_spectrum",
     # =========================================================================
     # New DSL - Primary Interface (Start here!)
     # =========================================================================
