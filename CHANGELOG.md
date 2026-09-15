@@ -6,6 +6,8 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-14
+
 ### Added
 - `Sweep` — a minimal, resumable multi-seed experiment helper. A full parameter ×
   seed grid with resume-on-restart, JSONL logging, and a grouped median±std summary
