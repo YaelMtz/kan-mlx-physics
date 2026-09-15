@@ -64,7 +64,7 @@ These numbers are **not cross-framework benchmarks** and should not be read as e
 
 ```bash
 # From source (recommended)
-git clone https://github.com/your-username/kan-mlx-physics.git
+git clone git@github.com:YaelMtz/kan-mlx-physics.git
 cd kan-mlx-physics
 pip install -e "."
 
@@ -83,8 +83,8 @@ pip install -e ".[all]"      # Everything
 from kan_mlx_physics import MultKAN, PINNTrainer, create_dataset
 
 # Shorthand alias (recommended for interactive use)
-import kanx
-from kanx import MultKAN, PINNTrainer, quick_fit
+import kan_mlx_physics as kmp
+from kan_mlx_physics import MultKAN, PINNTrainer, quick_fit
 ```
 
 ---
@@ -176,8 +176,11 @@ Per-step timings on an Apple M3 Max are given in the
 
 - **Unified memory removes the host↔device copy** that dominates small-batch PINN
   workloads on discrete-GPU stacks — the main structural advantage of MLX here.
-- **Second-order-autodiff losses are the bottleneck** (≈191 ms/step): MLX cannot
-  yet `compile` a nested `vjp`. This is a framework limit, not a hardware one.
+- **Second-order-autodiff carries a real but modest overhead** (≈2× over an
+  otherwise-identical first-order loss, measured in isolation — *not* an
+  order-of-magnitude ceiling; see the ≈11 ms vs ≈18 ms figures above). MLX cannot
+  yet `compile` a step containing a nested `vjp`, so the physics loop runs eagerly;
+  this is a framework limit, not a hardware one.
 
 ### Note on comparing to PyKAN
 
