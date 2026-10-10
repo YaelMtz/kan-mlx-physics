@@ -6,6 +6,40 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- **`PDEBuilder.coordinates(*names)` — declare the independent variables explicitly.**
+  The parser recognizes a fixed set of coordinate names (`x, y, z, t, r, r2, …`); any
+  other bare symbol appearing only algebraically — notably a momentum (`p`, `px`, `py`)
+  in a phase-space / Wigner equation — was otherwise silently classified as a
+  *parameter*, left without a value, and crashed at evaluation (`mx.full(..., None)`).
+  Declaring coordinates removes the ambiguity and makes genuine phase-space PDEs
+  first-class:
+  ```python
+  (PDEBuilder("(p**2/2 - E)*W - (hbar**2/8)*Derivative(W, x, 2) = 0")
+       .coordinates("x", "p")          # p is a coordinate, not a parameter
+       .params(hbar=1.0, E=0.5).trainable_params("E")
+       .domain([[0, L], [-P, P]]))     # bounds follow the declared coordinate order
+  ```
+  Also plumbed through the functional `pde(..., coords=[...])` entry point and
+  `parser.parse(..., extra_coords=[...])`.
+- **Dimension inference is now coordinate-driven.** The spatial/phase-space dimension
+  is the number of non-time coordinates actually present, so declared momenta count
+  correctly (a `(x, p)` Wigner problem reports `dimension == 2`); it no longer depends
+  on a hardcoded spatial-name set.
+- **`viz.paper.network(model, ...)`** — a single, publication-styled KAN network
+  figure (pykan-style: the learned activation is drawn on each edge; symbolic edges
+  render red). Wraps `MultKAN.plot` in the chainable `Figure` surface
+  (`.caption(...).save(...)`).
+- **`viz.paper.symbolic_refinement(model, x, ...)`** — the interpretability story in
+  one declarative call: a side-by-side *pre-symbolic* (learned spline edges, black)
+  vs *post-symbolic* (edges fixed to named physics functions via `auto_symbolic`,
+  red) network comparison, with the recovered formula placed beneath. The returned
+  `Figure` exposes `.formula`.
+
+### Fixed
+- `viz.paper`'s `Figure.caption(...)` now reserves bottom margin (`reserve=`) so the
+  caption sits below the x-axis label instead of overprinting it.
+
 ## [0.3.0] - 2026-09-14
 
 ### Added

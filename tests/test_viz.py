@@ -48,3 +48,39 @@ def test_live_monitor_is_zero_weight_hook():
     mon = live.monitor(total_steps=100, every=10, title="t")
     # weight 0 so it never changes the objective
     assert getattr(mon, "weight", 0.0) == 0.0
+
+
+def _tiny_kan():
+    import mlx.core as mx
+    from kan_mlx_physics import MultKAN, register_physics_symbolic
+    register_physics_symbolic()
+    m = MultKAN(width=[1, 1], grid=8, k=3, basis="laguerre",
+                basis_kwargs={"weighted": True, "nonnegative_input": True,
+                              "fixed_scale": 2.0},
+                base_fun=lambda z: mx.zeros_like(z), seed=0)
+    x = mx.linspace(0, 6, 80).reshape(-1, 1)
+    m(x)
+    return m, x
+
+
+def test_paper_network_saves():
+    from kan_mlx_physics.viz import paper
+    paper.use()
+    m, _ = _tiny_kan()
+    p = _tmp()
+    paper.network(m, in_vars=["r2"], out_vars=["W"]).save(p)
+    assert os.path.getsize(p) > 0; os.remove(p)
+
+
+def test_paper_symbolic_refinement_saves_and_has_formula():
+    from kan_mlx_physics.viz import paper
+    paper.use()
+    m, x = _tiny_kan()
+    p = _tmp()
+    ref = paper.symbolic_refinement(m, x, allowed_fns={"exp", "L_0"},
+                                    var_names=["r2"], in_vars=["r2"],
+                                    out_vars=["W"])
+    ref.save(p)
+    assert os.path.getsize(p) > 0
+    assert isinstance(ref.formula, str) and len(ref.formula) > 0
+    os.remove(p)

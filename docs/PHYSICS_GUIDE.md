@@ -351,6 +351,31 @@ print(f"Error: {abs(E_trained - E_analytic)/E_analytic*100:.2f}%")
 "(r2 - 2*E)*W - (hbar**2/4)*(4*r2*Derivative(W, r2, 2) + 4*Derivative(W, r2)) = 0"
 ```
 
+### Phase-space equations: declaring coordinates
+
+The parser recognizes a fixed set of coordinate names (`x, y, z, t, r, r2, …`). Any
+**other** bare symbol that appears only algebraically — most importantly a **momentum**
+like `p`, `px`, `py` in a genuine phase-space / Wigner equation `W(x, p)` — would
+otherwise be read as a *parameter*, left without a value, and fail at evaluation.
+
+Declare the independent variables explicitly with `.coordinates(...)`:
+
+```python
+# Free-particle Wigner (star-genvalue) equation on (x, p): genuinely 2D
+(PDEBuilder("(p**2/2 - E)*W - (hbar**2/8)*Derivative(W, x, 2) = 0")
+    .coordinates("x", "p")             # p is a COORDINATE, not a parameter
+    .params(hbar=1.0, E=0.5)
+    .trainable_params("E")
+    .domain([[0, L], [-P, P]])         # bounds follow the declared coordinate order
+    .loss(PDEResidualLoss(50))
+    .model(width=[2, 8, 1], basis="fourier", basis_M=12)
+    .solve())
+```
+
+The order of names in `.coordinates(x, p)` is the model's input-column order, so pass
+your `.domain(...)` bounds in the **same** order. (Equivalently, the functional API
+takes `pde(equation, coords=["x", "p"], ...)`.)
+
 ---
 
 ## Legacy PDE Solver (solve function)

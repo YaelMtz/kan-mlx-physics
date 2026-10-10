@@ -34,7 +34,7 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 import numpy as np
-from typing import Optional, Dict, List, Tuple, Callable, Union, Any, Set, Literal
+from typing import Optional, Dict, List, Tuple, Callable, Union, Any, Set, Literal, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -73,6 +73,7 @@ def pde(
     steps: Optional[int] = None,
     verbose: bool = True,
     format: str = "auto",
+    coords: Optional[Sequence[str]] = None,
 ) -> Tuple[Any, TrainingHistory]:
     """Solve a PDE from natural notation with full control.
 
@@ -143,7 +144,7 @@ def pde(
 
     # Parse equation
     parser = PDEParser()
-    parsed = parser.parse(equation, format=format)
+    parsed = parser.parse(equation, format=format, extra_coords=coords)
 
     # Analyze equation
     analysis = analyze(parsed)
@@ -256,6 +257,7 @@ class PDEBuilder:
         """
         self._equation = equation
         self._format = format
+        self._coordinates: List[str] = []  # extra declared coordinate names (e.g. momenta)
         self._params: Dict[str, float] = {}
         self._trainable_param_names: Set[str] = set()  # NEW: Track trainable params
         self._domain: Optional[Union[List, Tuple, Dict, Domain]] = None
@@ -273,6 +275,30 @@ class PDEBuilder:
         self._derivative_method: str = "autodiff"  # Default to autodiff for accuracy
         self._finite_diff_h: float = 1e-4  # Step size for finite differences
         self._live_plotter = None  # Optional LivePlotter for live visualization
+
+    def coordinates(self, *names: str) -> "PDEBuilder":
+        """Declare independent-variable (coordinate) names explicitly.
+
+        By default the parser recognizes a fixed set of coordinate names
+        (``x, y, z, t, r, r2, ...``); any other bare symbol that appears only
+        algebraically — notably a momentum like ``p``, ``px``, ``py`` in a
+        phase-space / Wigner equation — is otherwise silently treated as a
+        *parameter* and then has no value, which fails at evaluation time.
+        Declaring coordinates removes that ambiguity::
+
+            PDEBuilder("(p**2/2 - E)*W - (hbar**2/8)*Derivative(W, x, 2) = 0")
+                .coordinates("x", "p")          # p is a coordinate, not a parameter
+                .params(hbar=1.0, E=0.5).trainable_params("E")
+                .domain([[0, L], [-P, P]])      # bounds follow the coord order given
+
+        The order you list here is the column order of the model input, so pass
+        your ``.domain(...)`` bounds in the same order.
+
+        Args:
+            *names: Coordinate names, in input-column order.
+        """
+        self._coordinates = list(names)
+        return self
 
     def params(self, **kwargs) -> "PDEBuilder":
         """Set parameter values.
@@ -947,6 +973,7 @@ class PDEBuilder:
             losses=self._losses if self._losses else None,
             model_config=model_config,
             verbose=v,
+            coords=self._coordinates if self._coordinates else None,
         )
 
         # Store trained model for visualization methods
@@ -1050,7 +1077,8 @@ class PDEBuilder:
         if equation_lower in TEMPLATES:
             equation = TEMPLATES[equation_lower]
 
-        parsed = parse(equation, format=self._format)
+        parsed = parse(equation, format=self._format,
+                       extra_coords=self._coordinates or None)
         return analyze(parsed)
 
     def summary(self, print_it: bool = True) -> str:

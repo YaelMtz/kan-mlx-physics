@@ -174,19 +174,27 @@ class JetExtractor:
         self._walk(parsed.lhs, req)
         self._walk(parsed.rhs, req)
 
-        # Infer dimension from spatial coordinates
-        spatial = self.SPATIAL_COORDS.intersection(req.coordinates)
-        req.dimension = max(1, len(spatial))
+        # Infer dimension from the actual coordinates found (excluding time 't'),
+        # so declared coordinates such as momenta (p, px, py) count too. Fall back
+        # to the spatial-coordinate count if no non-time coordinates were found.
+        req.dimension = self._infer_dimension(req.coordinates)
 
         return req
+
+    def _infer_dimension(self, coordinates) -> int:
+        """Spatial/phase-space dimension = number of non-time coordinates."""
+        non_time = {c for c in coordinates if c != 't'}
+        if non_time:
+            return len(non_time)
+        spatial = self.SPATIAL_COORDS.intersection(coordinates)
+        return max(1, len(spatial))
 
     def extract_from_expr(self, expr: PDEExpr) -> JetRequirements:
         """Extract requirements from a single expression."""
         req = JetRequirements()
         self._walk(expr, req)
 
-        spatial = self.SPATIAL_COORDS.intersection(req.coordinates)
-        req.dimension = max(1, len(spatial))
+        req.dimension = self._infer_dimension(req.coordinates)
 
         return req
 
