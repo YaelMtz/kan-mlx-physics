@@ -79,8 +79,15 @@ class Figure:
         (self.ax[0] if _is_seq(self.ax) else self.ax).set_title(text)
         return self
 
-    def caption(self, text: str, y: float = 0.005) -> "Figure":
-        """Single italic caption strip along the bottom."""
+    def caption(self, text: str, y: float = 0.005, reserve: float = 0.14) -> "Figure":
+        """Single italic caption strip along the bottom.
+
+        Reserves bottom margin first so the caption sits *below* the x-axis label
+        instead of overprinting it (pass ``reserve=0`` to opt out).
+        """
+        if reserve:
+            # make room under the axes for both the x-label and the caption strip
+            self.fig.subplots_adjust(bottom=max(reserve, self.fig.subplotpars.bottom))
         self.fig.text(0.5, y, text, ha="center", va="bottom", fontsize=8.4,
                       style="italic", color=PALETTE["accent"])
         return self
@@ -204,5 +211,108 @@ def convergence(history: Any, *, keys: Optional[Sequence[str]] = None,
     return Figure(fig, ax)
 
 
-__all__ = ["use", "vs_analytic", "wigner_2d", "convergence", "Figure", "PALETTE",
-           "CATEGORICAL"]
+# --------------------------------------------------------------- network graphs
+def _render_network_png(model, path, *, in_vars, out_vars, title=""):
+    """Render a KAN network to a PNG via the pykan-style plotter.
+
+    model.plot writes 'kan_structure.png' into its folder; we forward a temp folder
+    and move the result to `path`. A forward pass is run first so the learned (or
+    symbolic) activations are cached and drawn on the edges.
+    """
+    import os
+    import mlx.core as mx
+    folder = os.path.dirname(os.path.abspath(path)) or "."
+    # cache activations: a plain forward pass over the model's input domain
+    try:
+        xs = mx.linspace(-1.0, 1.0, 200).reshape(-1, 1)
+        xs = mx.broadcast_to(xs, (200, model.width[0]))
+        model(xs)
+    except Exception:
+        pass
+    model.plot(folder=folder, in_vars=in_vars, out_vars=out_vars, title=title,
+               display=False, save=True)
+    src = os.path.join(folder, "kan_structure.png")
+    if os.path.abspath(src) != os.path.abspath(path):
+        os.replace(src, path)
+    return path
+
+
+def network(model, *, in_vars=None, out_vars=None, title: str = "",
+            figsize=(3.4, 3.8)) -> Figure:
+    """A single publication-styled KAN network figure (pykan-style: the learned
+    activation is drawn on each edge; symbolic edges are red).
+
+        paper.network(model, in_vars=["r²"], out_vars=["W"]).caption(...).save("net.pdf")
+
+    Wraps :meth:`MultKAN.plot` and embeds it in a clean, caption-chainable Figure.
+    """
+    import os, tempfile
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+    tmp = os.path.join(tempfile.mkdtemp(), "kan_structure.png")
+    _render_network_png(model, tmp, in_vars=in_vars, out_vars=out_vars, title=title)
+    img = mpimg.imread(tmp)
+    fig, ax = plt.subplots(figsize=figsize)
+    ax.imshow(img)
+    ax.axis("off")
+    if title:
+        ax.set_title(title)
+    return Figure(fig, ax)
+
+
+def symbolic_refinement(model, x, *, allowed_fns=None, basis_only: bool = False,
+                        r2_threshold: float = 0.0, var_names=None,
+                        in_vars=None, out_vars=None,
+                        figsize=(7.2, 4.0)) -> Figure:
+    """Side-by-side PRE- vs POST-symbolic network — the interpretability story in
+    one call.
+
+    Left: the learned spline network (black edges). Right: the same network after
+    :meth:`MultKAN.auto_symbolic` fixes each edge to a named function from the
+    physics vocabulary (edges turn red). The recovered formula is placed beneath.
+
+        paper.symbolic_refinement(model, x_sample,
+                                  allowed_fns={"exp", "WL_0"},
+                                  var_names=["r2"], in_vars=["r²"], out_vars=["W"]
+            ).save("pre_post.pdf")
+
+    `x` is a representative input sample (used both to cache activations and to
+    drive the symbolic fit). Returns a Figure; `.formula` holds the recovered
+    symbolic expression string.
+    """
+    import os, tempfile
+    import matplotlib.pyplot as plt
+    import matplotlib.image as mpimg
+
+    d = tempfile.mkdtemp()
+    pre_png = os.path.join(d, "pre.png")
+    post_png = os.path.join(d, "post.png")
+
+    # PRE: learned spline network
+    model(x)
+    _render_network_png(model, pre_png, in_vars=in_vars, out_vars=out_vars)
+
+    # refine: fix edges to named functions, then re-render (edges go red)
+    model.auto_symbolic(x=x, r2_threshold=r2_threshold,
+                        allowed_fns=allowed_fns, basis_only=basis_only,
+                        verbose=False)
+    formula = model.symbolic_formula(var_names=var_names, decimals=3, verbose=False)
+    model(x)
+    _render_network_png(model, post_png, in_vars=in_vars, out_vars=out_vars)
+
+    fig, axes = plt.subplots(1, 2, figsize=figsize)
+    for ax, png, lab in ((axes[0], pre_png, "pre-symbolic (learned)"),
+                         (axes[1], post_png, "post-symbolic (named)")):
+        ax.imshow(mpimg.imread(png))
+        ax.axis("off")
+        ax.set_title(lab, fontsize=11)
+    fig.text(0.5, 0.02, f"$W = {formula}$" if formula else "",
+             ha="center", va="bottom", fontsize=9, color=PALETTE["accent"])
+    fig.subplots_adjust(bottom=0.12, wspace=0.05)
+    out = Figure(fig, list(axes))
+    out.formula = formula
+    return out
+
+
+__all__ = ["use", "vs_analytic", "wigner_2d", "convergence", "network",
+           "symbolic_refinement", "Figure", "PALETTE", "CATEGORICAL"]

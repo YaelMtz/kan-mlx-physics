@@ -20,7 +20,7 @@ Example:
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Optional, Tuple, Any, Set
+from typing import Dict, List, Optional, Tuple, Any, Set, Sequence
 from dataclasses import dataclass
 
 from .expr import (
@@ -775,18 +775,25 @@ class PDEParser:
             'sympy': NaturalNormalizer(),  # SymPy format needs minimal normalization
         }
 
-    def parse(self, equation: str, format: str = "auto") -> ParsedPDE:
+    def parse(self, equation: str, format: str = "auto",
+              extra_coords: Optional[Sequence[str]] = None) -> ParsedPDE:
         """Parse an equation string to PDEExpr IR.
 
         Args:
             equation: The equation string in any supported format.
             format: Format hint ('unicode', 'latex', 'typst', 'subscript', 'sympy', 'natural', or 'auto').
+            extra_coords: Additional symbol names to treat as coordinates rather than
+                parameters (e.g. momentum names ``p``, ``px``, ``py`` for phase-space
+                problems). Without this, a symbol not in ``KNOWN_COORDS`` that appears
+                only algebraically is silently classified as a parameter.
 
         Returns:
             ParsedPDE containing the LHS and RHS expression trees.
         """
         if not SYMPY_AVAILABLE:
             raise ImportError("SymPy is required for parsing. Install with: pip install sympy")
+
+        extra = set(extra_coords or ())
 
         # Detect format
         if format == "auto":
@@ -799,8 +806,8 @@ class PDEParser:
         # Split on =
         lhs_str, rhs_str = self._split_equation(normalized)
 
-        # Build symbol dictionary
-        symbols = self._build_symbol_dict(normalized)
+        # Build symbol dictionary (declared coordinates registered as symbols too)
+        symbols = self._build_symbol_dict(normalized, extra_coords=extra)
 
         # Parse with SymPy
         try:
@@ -809,8 +816,8 @@ class PDEParser:
         except Exception as e:
             raise ValueError(f"Failed to parse equation: {equation}\nNormalized: {normalized}\nError: {e}")
 
-        # Convert SymPy → PDEExpr
-        coord_names = list(self.KNOWN_COORDS)
+        # Convert SymPy → PDEExpr (declared coordinates extend the recognized set)
+        coord_names = list(self.KNOWN_COORDS | extra)
         lhs_expr = self._sympy_to_pde_expr(lhs_sympy, coord_names, symbols)
         rhs_expr = self._sympy_to_pde_expr(rhs_sympy, coord_names, symbols)
 
@@ -834,13 +841,18 @@ class PDEParser:
 
         return parts[0].strip(), parts[1].strip()
 
-    def _build_symbol_dict(self, eq: str) -> Dict[str, Any]:
-        """Build SymPy symbol dictionary from equation context."""
+    def _build_symbol_dict(self, eq: str, extra_coords: Optional[set] = None) -> Dict[str, Any]:
+        """Build SymPy symbol dictionary from equation context.
+
+        ``extra_coords`` are user-declared coordinate names (e.g. momenta) that are
+        registered as coordinate symbols in addition to ``KNOWN_COORDS``.
+        """
         symbols = {}
+        all_coords = self.KNOWN_COORDS | set(extra_coords or ())
 
         # First, identify which coordinates are in the equation
         coords_in_eq = []
-        for name in self.KNOWN_COORDS:
+        for name in all_coords:
             if name in eq:
                 coords_in_eq.append(name)
                 symbols[name] = sp.Symbol(name, real=True)
@@ -1060,7 +1072,8 @@ class PDEParser:
 # CONVENIENCE FUNCTIONS
 # =============================================================================
 
-def parse(equation: str, format: str = "auto") -> ParsedPDE:
+def parse(equation: str, format: str = "auto",
+          extra_coords: Optional[Sequence[str]] = None) -> ParsedPDE:
     """Parse a PDE equation string.
 
     This is a convenience function that creates a PDEParser and parses
@@ -1069,6 +1082,8 @@ def parse(equation: str, format: str = "auto") -> ParsedPDE:
     Args:
         equation: The equation string in any supported format.
         format: Format hint (default: 'auto' for auto-detection).
+        extra_coords: Additional coordinate names (e.g. momenta ``p``) to treat as
+            coordinates rather than parameters.
 
     Returns:
         ParsedPDE containing the expression trees.
@@ -1078,7 +1093,7 @@ def parse(equation: str, format: str = "auto") -> ParsedPDE:
         >>> print(parsed.lhs)
     """
     parser = PDEParser()
-    return parser.parse(equation, format)
+    return parser.parse(equation, format, extra_coords=extra_coords)
 
 
 def detect_format(equation: str) -> str:
