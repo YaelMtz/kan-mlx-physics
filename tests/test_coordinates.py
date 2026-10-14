@@ -57,3 +57,40 @@ def test_builder_coordinates_api_runs_end_to_end():
             .solve(verbose=False))
     E = float(np.array(h.trainable_params["E"]))
     assert np.isfinite(E)                           # no crash, E stays finite
+
+
+def test_declared_coords_override_known_coord_params():
+    """A parameter whose name happens to be in KNOWN_COORDS (e.g. 'a') must stay a
+    PARAMETER when coordinates are declared explicitly — not be miscast as a
+    coordinate (which corrupted the coord_map and broke the residual)."""
+    eq = ("-(1/(2*m))*(Derivative(w, t, 2) - hbar*Derivative(w, x, t)"
+          " + (hbar**2/4)*Derivative(w, x, 2))"
+          " + D*(exp(-2*a*x - a*hbar*t) - 2*exp(-a*x - a*hbar*t/2))*w = E*w")
+    a = analyze(parse(eq, extra_coords=["x", "t"]))
+    assert sorted(a.coordinates) == ["t", "x"]      # only declared coords
+    assert "a" not in a.coordinates                 # 'a' is a parameter
+    assert "a" in a.parameters
+
+
+def test_mixed_and_second_derivatives_with_exponential_potential():
+    """Regression: Derivative(w,t,2) combined with an exponential term and a mixed
+    Derivative(w,x,t) must not leak an (N, dim) shape and crash the residual —
+    the full Mellin-transformed Morse equation must build and solve."""
+    import mlx.core as mx
+    import numpy as np
+    from kan_mlx_physics.pde import PDEBuilder, PDEResidualLoss, EigenvalueLoss
+
+    eq = ("-(1/(2*m))*(Derivative(w, t, 2) - hbar*Derivative(w, x, t)"
+          " + (hbar**2/4)*Derivative(w, x, 2))"
+          " + D*(exp(-2*a*x - a*hbar*t) - 2*exp(-a*x - a*hbar*t/2))*w = E*w")
+    m, h = (PDEBuilder(eq)
+            .coordinates("x", "t")
+            .params(m=1.0, hbar=1.0, D=8.0, a=0.5, E=1.0).trainable_params("E")
+            .domain([[-2, 6], [-10, 10]])
+            .loss(PDEResidualLoss(weight=1.0))
+            .loss(EigenvalueLoss(weight=1.0, method="trainable"))
+            .phase("s", steps=3, lr=1e-3, n_points=60, log_freq=99999)
+            .model(width=[2, 4, 1], grid=6, k=3,
+                   base_fun=lambda z: mx.zeros_like(z), seed=0)
+            .solve(verbose=False))
+    assert np.isfinite(float(np.array(h.trainable_params["E"])))
