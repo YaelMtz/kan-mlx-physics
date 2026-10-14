@@ -244,6 +244,17 @@ class CompiledResidual:
             if len(deriv_value.shape) > 1 and deriv_value.shape[-1] == 1:
                 deriv_value = mx.squeeze(deriv_value, axis=-1)
 
+            # Defensive column reduction: a per-coordinate derivative that is still
+            # (N, dim) here (e.g. a second derivative w.r.t. a non-first coordinate
+            # that bypassed the earlier select) must be reduced to the column for
+            # the coordinate it is taken with respect to, or it will broadcast
+            # against scalar-per-point terms and crash (shapes (N) vs (N, dim)).
+            if len(deriv_value.shape) > 1 and deriv_value.shape[-1] > 1:
+                wrt_name = wrt if isinstance(wrt, str) else (wrt[0] if wrt else None)
+                coord_idx = self.coord_map.get(wrt_name, 0)
+                if coord_idx < deriv_value.shape[-1]:
+                    deriv_value = deriv_value[:, coord_idx]
+
             cache.set_derivative(var_name, wrt, order, deriv_value)
 
         # Compute Laplacians

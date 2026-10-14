@@ -765,6 +765,7 @@ class PDEParser:
     KNOWN_PARAMS = {'E', 'hbar', 'm', 'theta', 'omega', 'Lambda', 'alpha', 'beta', 'gamma', 'k', 'c'}
 
     def __init__(self):
+        self._strict_coords = False
         self.format_detector = FormatDetector()
         self.normalizers = {
             'unicode': UnicodeNormalizer(),
@@ -816,8 +817,16 @@ class PDEParser:
         except Exception as e:
             raise ValueError(f"Failed to parse equation: {equation}\nNormalized: {normalized}\nError: {e}")
 
-        # Convert SymPy → PDEExpr (declared coordinates extend the recognized set)
-        coord_names = list(self.KNOWN_COORDS | extra)
+        # Convert SymPy → PDEExpr. When the caller declares coordinates explicitly
+        # those names are AUTHORITATIVE: only they are coordinates, so a symbol that
+        # merely happens to be in KNOWN_COORDS (e.g. 'a', 'r') is correctly left as a
+        # parameter. Without an explicit declaration, fall back to KNOWN_COORDS.
+        if extra:
+            coord_names = list(extra)
+            self._strict_coords = True
+        else:
+            coord_names = list(self.KNOWN_COORDS)
+            self._strict_coords = False
         lhs_expr = self._sympy_to_pde_expr(lhs_sympy, coord_names, symbols)
         rhs_expr = self._sympy_to_pde_expr(rhs_sympy, coord_names, symbols)
 
@@ -945,7 +954,10 @@ class PDEParser:
         # Symbol
         if isinstance(expr, sp.Symbol):
             name = str(expr)
-            if name in coord_names or name in self.KNOWN_COORDS:
+            # When coordinates are declared explicitly (strict mode), only the
+            # declared names are coordinates; otherwise also accept KNOWN_COORDS.
+            strict = getattr(self, "_strict_coords", False)
+            if name in coord_names or (not strict and name in self.KNOWN_COORDS):
                 return Coordinate(name)
             if name in self.KNOWN_PARAMS:
                 return Parameter(name)

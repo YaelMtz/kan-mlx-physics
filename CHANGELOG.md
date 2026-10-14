@@ -6,6 +6,20 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 
 ## [Unreleased]
 
+### Fixed
+- **Declared coordinates are now authoritative over the `KNOWN_COORDS` guess list.**
+  A parameter whose name happened to be in `KNOWN_COORDS` (e.g. the Morse width `a`,
+  or `r`) was miscast as a *coordinate* even when `.coordinates(...)` was used,
+  corrupting the coordinate→column map and crashing the residual with a shape
+  mismatch. With explicit coordinates, only the declared names are coordinates.
+- **Per-coordinate derivatives are reliably reduced to their own column.** A second
+  derivative with respect to a non-first coordinate (e.g. `Derivative(w, t, 2)`)
+  could leak an `(N, dim)` array into the residual and fail to broadcast against the
+  scalar-per-point terms (`(N)` vs `(N, dim)`); a defensive column reduction now
+  guarantees the right shape. Together these let the full Mellin-transformed
+  phase-space equations (mixed `∂_x∂_t`, second `∂_t²`, exponential potentials)
+  build and solve.
+
 ### Added
 - **`PDEBuilder.coordinates(*names)` — declare the independent variables explicitly.**
   The parser recognizes a fixed set of coordinate names (`x, y, z, t, r, r2, …`); any
