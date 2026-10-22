@@ -94,3 +94,26 @@ def test_mixed_and_second_derivatives_with_exponential_potential():
                    base_fun=lambda z: mx.zeros_like(z), seed=0)
             .solve(verbose=False))
     assert np.isfinite(float(np.array(h.trainable_params["E"])))
+
+
+def test_mixed_partial_is_computed_correctly():
+    """A mixed derivative Derivative(w, x, t) must evaluate to the true ∂²w/∂x∂t, not
+    silently collapse to the first-axis derivative. Checked against an analytic model
+    w = sin(x) cos(t), whose ∂²w/∂x∂t = -cos(x) sin(t)."""
+    import mlx.core as mx
+    import numpy as np
+    from kan_mlx_physics.pde.compiler import compile_residual
+
+    p = parse("Derivative(w, x, t) = 0", extra_coords=["x", "t"])
+    comp = compile_residual(p, analyze(p).jet_req)
+
+    class _Model:
+        def __call__(self, X):
+            return (mx.sin(X[:, 0]) * mx.cos(X[:, 1])).reshape(-1, 1)
+
+    X = mx.array(np.array([[0.3, 0.5], [1.0, 0.2], [-0.7, 1.1]], dtype=np.float32))
+    got = np.array(comp.evaluate(_Model(), X, {}))        # residual == the mixed partial
+    want = np.array([-np.cos(0.3) * np.sin(0.5),
+                     -np.cos(1.0) * np.sin(0.2),
+                     -np.cos(-0.7) * np.sin(1.1)])
+    assert np.allclose(got, want, atol=1e-3), f"{got} vs {want}"

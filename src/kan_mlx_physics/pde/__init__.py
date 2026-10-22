@@ -141,6 +141,7 @@ from .losses import (
     DecayLoss,
     AnchorLoss,
     RegularizationLoss,
+    TransitionLoss,
     DataLoss,
 )
 
@@ -319,6 +320,7 @@ __all__ = [
     "DecayLoss",
     "AnchorLoss",
     "RegularizationLoss",
+    "TransitionLoss",
     "DataLoss",
 
     # =========================================================================

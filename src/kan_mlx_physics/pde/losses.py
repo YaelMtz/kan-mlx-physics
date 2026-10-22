@@ -936,6 +936,66 @@ class LossComposer:
         return f"LossComposer({len(self.terms)} terms, {enabled} enabled)"
 
 
+class TransitionLoss(LossTerm):
+    """Coupled left/right ⋆-genvalue residual for a non-diagonal (transition) Wigner
+    distribution: ``H ⋆ W = E_L W`` AND ``W ⋆ H = E_R W`` simultaneously.
+
+    The non-diagonal Wigner function ``W_{E_L E_R}`` is the Weyl symbol of a transition
+    operator ``|E_L><E_R|`` and must satisfy the star-genvalue equation from *both* sides
+    with independent eigenvalues. In the Mellin-transformed (real) variables used for
+    exponential-potential cosmologies, the two residuals differ by the sign of the cross
+    (mixed-derivative) term and of the transform variable — so they are two ordinary real
+    equation strings. This loss compiles both and sums their squared residuals, each
+    reading its own trainable eigenvalue from ``ctx.trainable_params``.
+
+        TransitionLoss(
+            left_eq="... = E_L*w", right_eq="... = E_R*w",
+            coords=["x", "t"], params={"hbar": 1.0},
+            weight=50.0,
+        )
+
+    Pair it with ``.trainable_params("E_L", "E_R")`` (and usually
+    ``.param_bounds(E_L=(None,None), E_R=(None,None))`` for Lorentzian/cosmological E).
+    The diagonal case is just ``E_L == E_R`` — then prefer a single ``PDEResidualLoss``.
+    """
+
+    def __init__(self, left_eq: str, right_eq: str,
+                 coords: Optional[List[str]] = None,
+                 params: Optional[Dict[str, float]] = None,
+                 weight: float = 1.0, normalize: bool = False, **kwargs):
+        super().__init__(weight, **kwargs)
+        from .parser import parse
+        from .analysis import analyze
+        from .compiler import compile_residual
+        self._params = dict(params or {})
+        self._normalize = normalize
+        self._left = self._compile(left_eq, coords, parse, analyze, compile_residual)
+        self._right = self._compile(right_eq, coords, parse, analyze, compile_residual)
+
+    @staticmethod
+    def _compile(eq, coords, parse, analyze, compile_residual):
+        parsed = parse(eq, extra_coords=coords)
+        return compile_residual(parsed, analyze(parsed).jet_req)
+
+    def _side(self, comp, ctx) -> mx.array:
+        all_params = dict(self._params)
+        all_params.update(ctx.params)
+        for name, value in ctx.trainable_params.items():
+            all_params[name] = value
+        r = comp.evaluate(ctx.trainer or ctx.model, ctx.x_interior, all_params)
+        loss = mx.mean(r ** 2)
+        if self._normalize:
+            u = ctx.get_u(ctx.x_interior)
+            u = mx.squeeze(u, -1) if len(u.shape) > 1 else u
+            loss = loss / (mx.mean(u ** 2) + 1e-8)
+        return loss
+
+    def compute(self, ctx) -> mx.array:
+        if ctx.x_interior is None:
+            return mx.array(0.0)
+        return self._side(self._left, ctx) + self._side(self._right, ctx)
+
+
 # =============================================================================
 # DEFAULT LOSS CONFIGURATIONS
 # =============================================================================

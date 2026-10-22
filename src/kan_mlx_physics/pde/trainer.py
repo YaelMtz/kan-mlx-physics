@@ -20,7 +20,7 @@ Example:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Callable, Any, Set, Union
+from typing import Dict, List, Optional, Callable, Any, Set, Union, Tuple
 import time
 
 import mlx.core as mx
@@ -621,6 +621,7 @@ class PDETrainer:
         params: Dict[str, float] = None,
         trainable_param_names: Optional[Set[str]] = None,
         pinn_trainer: Optional[Any] = None,
+        param_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
     ):
         """Initialize the PDE trainer.
 
@@ -633,6 +634,12 @@ class PDETrainer:
             params: All parameter values (fixed and initial values for trainable).
             trainable_param_names: Set of parameter names to train via Adam.
             pinn_trainer: Optional PINNTrainer for derivatives.
+            param_bounds: Optional per-trainable-param ``{name: (lower, upper)}`` bounds
+                applied after each Adam step. ``None`` on either side means unbounded on
+                that side. Any trainable param NOT listed keeps the historical default
+                lower bound of ``0.01`` (positivity), so existing problems are unchanged;
+                pass e.g. ``{"E": (None, None)}`` to allow a negative eigenvalue (Morse,
+                hydrogen, Lorentzian cosmological constraints).
         """
         self.model = model
         self.domain = domain
@@ -644,6 +651,7 @@ class PDETrainer:
         # Separate fixed params from trainable params
         all_params = params or {}
         self.trainable_param_names = trainable_param_names or set()
+        self.param_bounds = param_bounds or {}
         self.trainable_params: Dict[str, mx.array] = {}
         self.fixed_params: Dict[str, float] = {}
 
@@ -683,6 +691,20 @@ class PDETrainer:
 
         self.history = TrainingHistory()
         self._live_plotter = None  # Injected externally by pde() if live_plot() was called
+
+    def _project_param(self, name: str, value: mx.array) -> mx.array:
+        """Clamp a trainable param to its bounds after an Adam step.
+
+        Default (name not in ``param_bounds``): lower bound 0.01, matching the historical
+        positivity projection. An explicit ``(lower, upper)`` with ``None`` on a side
+        leaves that side unbounded — e.g. ``(None, None)`` allows any real value.
+        """
+        lower, upper = self.param_bounds.get(name, (0.01, None))
+        if lower is not None:
+            value = mx.maximum(value, mx.array([float(lower)]))
+        if upper is not None:
+            value = mx.minimum(value, mx.array([float(upper)]))
+        return value
 
     def train(self, verbose: bool = True) -> TrainingHistory:
         """Execute the full training schedule.
@@ -1069,7 +1091,7 @@ class PDETrainer:
             m_hat = self.m_trainable[name] / (1 - beta1 ** t)
             v_hat = self.v_trainable[name] / (1 - beta2 ** t)
             self.trainable_params[name] = param - lr * m_hat / (mx.sqrt(v_hat) + eps)
-            self.trainable_params[name] = mx.maximum(self.trainable_params[name], mx.array([0.01]))
+            self.trainable_params[name] = self._project_param(name, self.trainable_params[name])
 
         mx.eval(*self.trainable_params.values())
         return loss
@@ -1173,7 +1195,7 @@ class PDETrainer:
             m_hat = self.m_trainable[name] / (1 - beta1 ** t)
             v_hat = self.v_trainable[name] / (1 - beta2 ** t)
             self.trainable_params[name] = param - lr * m_hat / (mx.sqrt(v_hat) + eps)
-            self.trainable_params[name] = mx.maximum(self.trainable_params[name], mx.array([0.01]))
+            self.trainable_params[name] = self._project_param(name, self.trainable_params[name])
 
         mx.eval(loss, params_list, self.m_model, self.v_model, *self.trainable_params.values())
         return loss

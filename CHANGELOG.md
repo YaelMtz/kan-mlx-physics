@@ -6,7 +6,28 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 
 ## [Unreleased]
 
+### Added
+- **`PDEBuilder.param_bounds(**bounds)` — allow non-positive trainable eigenvalues.** The
+  trainer clamped every trainable parameter to `≥ 0.01` after each step (a positivity
+  projection), which is right for an energy above a well bottom but WRONG for problems
+  whose eigenvalue is genuinely negative — the Morse oscillator, hydrogen, and the
+  Lorentzian Wheeler–DeWitt / cosmological constraints. `param_bounds(E=(None, None))`
+  lets such an eigenvalue train freely; unlisted params keep the historical `≥ 0.01`
+  default, so existing problems are unchanged. Plumbed through `pde(..., param_bounds=…)`.
+- **`TransitionLoss(left_eq, right_eq, …)` — coupled left/right ⋆-genvalue residual.** A
+  non-diagonal (transition) Wigner distribution `W_{E_L E_R}` must satisfy `H⋆W = E_L W`
+  AND `W⋆H = E_R W` simultaneously with two independent eigenvalues. This loss compiles
+  both equation strings and sums their squared residuals, each reading its own trainable
+  eigenvalue; pair it with `trainable_params("E_L","E_R")`. Enables the non-diagonal
+  anisotropic-cosmology (Taub / Kantowski–Sachs) problems.
+
 ### Fixed
+- **Mixed partial derivatives are now evaluated correctly.** `Derivative(w, x, t)` (and
+  any multi-coordinate derivative) silently collapsed to the first-axis derivative only
+  (`∂_x` instead of `∂_x∂_t`), because the compiler took `wrt[0]`. Mixed-derivative nodes
+  are now detected in the residual tree and computed via nested autodiff (`∂²u/∂x_i∂x_j`),
+  verified against the analytic `∂²[sin x cos t]/∂x∂t`. This matters for the transformed
+  (Mellin-real) phase-space equations, whose kinetic cross-term is a genuine mixed partial.
 - **Declared coordinates are now authoritative over the `KNOWN_COORDS` guess list.**
   A parameter whose name happened to be in `KNOWN_COORDS` (e.g. the Morse width `a`,
   or `r`) was miscast as a *coordinate* even when `.coordinates(...)` was used,
