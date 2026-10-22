@@ -74,6 +74,7 @@ def pde(
     verbose: bool = True,
     format: str = "auto",
     coords: Optional[Sequence[str]] = None,
+    param_bounds: Optional[Dict[str, Tuple[Optional[float], Optional[float]]]] = None,
 ) -> Tuple[Any, TrainingHistory]:
     """Solve a PDE from natural notation with full control.
 
@@ -205,6 +206,7 @@ def pde(
         schedule=schedule,
         params=all_params,
         trainable_param_names=trainable_param_names,
+        param_bounds=param_bounds,
     )
 
     # Wire live plotter into trainer
@@ -260,6 +262,7 @@ class PDEBuilder:
         self._coordinates: List[str] = []  # extra declared coordinate names (e.g. momenta)
         self._params: Dict[str, float] = {}
         self._trainable_param_names: Set[str] = set()  # NEW: Track trainable params
+        self._param_bounds: Dict[str, Tuple[Optional[float], Optional[float]]] = {}
         self._domain: Optional[Union[List, Tuple, Dict, Domain]] = None
         self._bcs: List[Any] = []
         self._losses: List[LossTerm] = []
@@ -333,6 +336,26 @@ class PDEBuilder:
             ...     .solve()
         """
         self._trainable_param_names.update(names)
+        return self
+
+    def param_bounds(self, **bounds) -> "PDEBuilder":
+        """Set ``(lower, upper)`` bounds on trainable parameters, applied after each
+        optimizer step. ``None`` on a side means unbounded there.
+
+        By default a trainable parameter is kept ``>= 0.01`` (positivity), which is right
+        for an energy measured above a well bottom but WRONG for problems whose eigenvalue
+        is genuinely negative — the Morse oscillator, hydrogen, or the Lorentzian
+        Wheeler–DeWitt / cosmological constraints, where the energy can be below zero.
+        Declaring a bound of ``(None, None)`` lets such an eigenvalue train freely::
+
+            PDEBuilder(eq).params(E=-7.0).trainable_params("E")
+                .param_bounds(E=(None, None))        # allow a negative eigenvalue
+                .loss(EigenvalueLoss(method="trainable")).solve()
+
+        Args:
+            **bounds: ``name=(lower, upper)`` per trainable parameter.
+        """
+        self._param_bounds.update(bounds)
         return self
 
     def function(self, name: str, fn: Callable) -> "PDEBuilder":
@@ -974,6 +997,7 @@ class PDEBuilder:
             model_config=model_config,
             verbose=v,
             coords=self._coordinates if self._coordinates else None,
+            param_bounds=self._param_bounds if self._param_bounds else None,
         )
 
         # Store trained model for visualization methods

@@ -270,6 +270,43 @@ class CompiledResidual:
 
             cache.set_laplacian(var_name, lap_value)
 
+        # Compute mixed partials (e.g. Derivative(w, [x, t], 1)). These are NOT in
+        # jet_req.derivatives as a product (analysis records each axis separately), so we
+        # scan the residual tree for mixed-derivative nodes and cache them under a
+        # composite key ("x,t"). Without this, a mixed partial would silently evaluate as
+        # the first-axis derivative only.
+        model_for_grad = trainer_or_model
+        if has_trainer and hasattr(trainer_or_model, 'model'):
+            model_for_grad = trainer_or_model.model
+        for coords in self._find_mixed_partials(self.residual_expr):
+            key = ",".join(coords)
+            if cache.get_derivative("__mixed__", key, 1) is None:
+                val = self._autodiff_mixed_partial(model_for_grad, x, coords)
+                if len(val.shape) > 1 and val.shape[-1] == 1:
+                    val = mx.squeeze(val, axis=-1)
+                cache.set_derivative("__mixed__", key, 1, val)
+
+    @staticmethod
+    def _find_mixed_partials(expr: PDEExpr) -> "list[list[str]]":
+        """Collect the coordinate lists of all mixed-derivative nodes in an expr tree."""
+        found = []
+
+        def walk(e):
+            if isinstance(e, Derivative):
+                wrt = e.wrt
+                if not isinstance(wrt, str) and len(wrt) > 1:
+                    found.append(list(wrt))
+            for attr in ("expr", "left", "right", "operand", "base", "exp"):
+                child = getattr(e, attr, None)
+                if isinstance(child, PDEExpr):
+                    walk(child)
+            for child in getattr(e, "args", []) or []:
+                if isinstance(child, PDEExpr):
+                    walk(child)
+
+        walk(expr)
+        return found
+
     def _eval_expr(
         self,
         expr: PDEExpr,
@@ -315,6 +352,14 @@ class CompiledResidual:
         if isinstance(expr, Derivative):
             if isinstance(expr.expr, Variable):
                 var_name = expr.expr.name
+                # Mixed partial (wrt is a multi-element list): look up the composite key
+                # computed in _compute_jets, instead of silently using only the first axis.
+                if not isinstance(expr.wrt, str) and len(expr.wrt) > 1:
+                    key = ",".join(expr.wrt)
+                    cached = cache.get_derivative("__mixed__", key, 1)
+                    if cached is not None:
+                        return cached
+                    return mx.zeros(x.shape[0])
                 wrt = expr.wrt if isinstance(expr.wrt, str) else expr.wrt[0]
                 cached = cache.get_derivative(var_name, wrt, expr.order)
                 if cached is not None:
@@ -578,6 +623,32 @@ class CompiledResidual:
 
         else:
             raise NotImplementedError(f"Order {order} autodiff derivatives not implemented")
+
+    def _autodiff_mixed_partial(self, model: Any, x: mx.array,
+                                coords: "list[str]") -> mx.array:
+        """Mixed second partial ∂²u/∂x_i∂x_j via nested batch-grad.
+
+        Handles a mixed derivative like ``Derivative(u, [x, t], 1)`` (one derivative per
+        listed coordinate). Differentiates sum(u) once w.r.t. the first coordinate, then
+        the resulting per-sample gradient w.r.t. the second, selecting the right columns.
+        """
+        i = self.coord_map.get(coords[0], 0)
+        j = self.coord_map.get(coords[1], 0)
+
+        def u_sum(xb: mx.array) -> mx.array:
+            y = model(xb)
+            if len(y.shape) > 1 and y.shape[-1] == 1:
+                y = mx.squeeze(y, axis=-1)
+            return mx.sum(y)
+
+        grad_fn = mx.grad(u_sum)                       # x -> (N, dim): ∂(sum u)/∂x_k
+
+        def di_sum(xb: mx.array) -> mx.array:
+            g = grad_fn(xb)
+            return mx.sum(g) if len(g.shape) == 1 else mx.sum(g[:, i])
+
+        g2 = mx.grad(di_sum)(x)                         # ∂/∂x_k of (∂ sum u/∂x_i)
+        return g2 if len(g2.shape) == 1 else g2[:, j]
 
     def _compute_laplacian(
         self,
