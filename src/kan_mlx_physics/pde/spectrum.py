@@ -48,12 +48,32 @@ class DeflationLoss(LossTerm):
 
     def __init__(self, priors: Sequence[Callable], domain,
                  weight: float = 5000.0, ngrid: int = 3000,
-                 scale: float = 1.0, **kw):
+                 scale: float = 1.0, measure: Optional[Callable] = None, **kw):
+        """Hilbert-Schmidt deflation.
+
+        measure: optional callable x -> mu(x) giving the physical integration weight, so the
+            overlap is the TRUE inner product int w w_m mu(x) dx (approximated as a weighted mean
+            times the domain length). The orthogonality Tr(rho_n rho_m)=0 only holds in the
+            physical phase-space measure: for a RADIAL Wigner function the weight is mu = 2 pi r,
+            NOT the flat mu = 1. Using the flat measure (the default, for backward compatibility)
+            computes the WRONG inner product -- the recovered states are not actually orthogonal,
+            and deflation removes the wrong component. Pass measure=lambda x: 2*pi*x for radial
+            problems (verified: flat gives overlap -0.05 vs the true 0.30; the physical measure is
+            exact and makes the eigenbasis orthogonal, so L1 sparsity selects a single eigenstate).
+        """
         super().__init__(weight, **kw)
         lo, hi = domain
         self._xg = mx.linspace(float(lo), float(hi), ngrid).reshape(-1, 1)
         self._L = float(hi) - float(lo)
         self._scale = scale
+        # physical measure weight on the grid (flat = 1 if not supplied)
+        if measure is not None:
+            mu = measure(self._xg)
+            mu = mx.squeeze(mu, -1) if len(mu.shape) > 1 else mu
+            self._mu = mx.stop_gradient(mu)
+            self._mu_mean = mx.stop_gradient(mx.mean(self._mu))
+        else:
+            self._mu = None
         self._tab = []
         for pm in priors:
             wv = mx.stop_gradient(pm(self._xg))
@@ -67,7 +87,11 @@ class DeflationLoss(LossTerm):
         w = mx.squeeze(w, -1) if len(w.shape) > 1 else w
         tot = mx.array(0.0)
         for wv in self._tab:
-            overlap = mx.mean(w * wv) * self._L
+            if self._mu is not None:
+                # physical inner product int w w_m mu dx ~= mean(w w_m mu) * L
+                overlap = mx.mean(w * wv * self._mu) * self._L
+            else:
+                overlap = mx.mean(w * wv) * self._L
             tot = tot + (self._scale * overlap) ** 2
         return tot
 

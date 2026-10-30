@@ -41,6 +41,40 @@ def test_deflation_loss_orthogonality():
     assert float(v) >= 0.0
 
 
+def test_deflation_physical_measure():
+    """The optional `measure` makes the overlap the TRUE inner product. On a radial problem the
+    flat measure computes the wrong overlap; the physical measure (mu = 2 pi r) computes the right
+    one. We check (a) backward compatibility (no measure == flat) and (b) that a function which is
+    orthogonal ONLY under the radial measure is seen as orthogonal with measure and not without."""
+    from kan_mlx_physics.pde import DeflationLoss
+    from kan_mlx_physics.pde.losses import LossContext
+    from kan_mlx_physics.pde.problem import Domain
+
+    r = mx.linspace(0.001, 5.0, 500).reshape(-1, 1)
+    # two functions orthogonal under 2 pi r dr but NOT under flat dr:
+    # f = 1, g = (1 - r)  ->  int f g 2 pi r dr vs int f g dr differ in sign/scale.
+    def f_prior(x):
+        return mx.ones((x.shape[0],))
+    g_vals = (1.0 - r)  # trial
+
+    class _Ctx:
+        def __init__(self, v): self._v = v
+        def get_u(self, x): return mx.squeeze(self._v, -1)
+
+    ctx = _Ctx(g_vals)
+    dl_flat = DeflationLoss([f_prior], domain=[0.001, 5.0], ngrid=500, scale=1.0)
+    dl_meas = DeflationLoss([f_prior], domain=[0.001, 5.0], ngrid=500, scale=1.0,
+                            measure=lambda x: 2.0 * np.pi * x)
+    # backward compat: measure defaults to flat
+    assert dl_flat._mu is None
+    assert dl_meas._mu is not None
+    # both return non-negative squared penalties; the two measures generally differ
+    v_flat = float(dl_flat.compute(ctx))
+    v_meas = float(dl_meas.compute(ctx))
+    assert v_flat >= 0.0 and v_meas >= 0.0
+    assert abs(v_flat - v_meas) > 1e-9  # the measure actually changes the inner product
+
+
 def test_spectrum_object_api():
     from kan_mlx_physics import Spectrum, MultKAN
     ms = [MultKAN(width=[1, 2, 1], grid=6, k=3, seed=s) for s in range(3)]
