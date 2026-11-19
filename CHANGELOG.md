@@ -7,6 +7,17 @@ All notable changes to KAN-MLX-Physics are documented here. This project follows
 ## [Unreleased]
 
 ### Added
+- **`model(init_edge_coef=…, freeze_edges=True)` — pin and freeze edge coefficients.**
+  Supports solves in which the *shape* of an edge is fixed by construction and only the
+  remaining degrees of freedom — the edge affine and trainable scalars such as the
+  eigenvalue `E` — are optimized. `init_edge_coef` sets the spline coefficients (an array
+  applied to layer 0, a `{layer: array}` dict, or a `callable(i, layer)`), reshaped to each
+  layer's `coef`; `freeze_edges=True` calls `model.freeze(keys="coef")` so the optimizer
+  never updates them. The canonical use is the **architectural ★-ladder**: with a
+  weighted-Laguerre edge whose `m`-th feature is `L_m(2s)e^{-s}`, a one-hot `init_edge_coef`
+  at index `n` makes the edge emit the exact `n`-th Wigner ★-genfunction, so `n` becomes a
+  *structural* index the optimizer never has to discover among a coefficient continuum —
+  recovering the high-`n` FLRW states that free-coefficient optimization could not reach.
 - **`PDEBuilder.param_bounds(**bounds)` — allow non-positive trainable eigenvalues.** The
   trainer clamped every trainable parameter to `≥ 0.01` after each step (a positivity
   projection), which is right for an energy above a well bottom but WRONG for problems

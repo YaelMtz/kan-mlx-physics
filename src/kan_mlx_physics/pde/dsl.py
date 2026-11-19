@@ -1427,7 +1427,107 @@ def _create_model(
     if restore_path is not None:
         _restore_model(model, restore_path)
 
+    # Optionally pin and/or freeze edge coefficients. This supports solves in which
+    # the *shape* of an edge is fixed by construction (e.g. a physically-associated
+    # basis state) and only the remaining degrees of freedom — the edge affine and
+    # any trainable scalars such as the eigenvalue E — are optimized. The canonical
+    # use is the architectural ★-ladder: with a weighted-Laguerre edge whose m-th
+    # feature is L_m(2s)e^{-s}, pinning the read-out to a one-hot at index n makes the
+    # edge emit the exact n-th Wigner ★-genfunction, so n becomes a *structural* index
+    # the optimizer never has to discover among a coefficient continuum.
+    init_edge_coef = config.pop('init_edge_coef', None)
+    if init_edge_coef is not None:
+        _apply_edge_coef(model, init_edge_coef)
+    init_edge_affine = config.pop('init_edge_affine', None)
+    if init_edge_affine is not None:
+        _apply_edge_affine(model, init_edge_affine)
+    freeze_edges = config.pop('freeze_edges', False)
+    if freeze_edges:
+        # nn.Module.freeze(keys=…) removes the named leaves from trainable_parameters(),
+        # so the optimizer leaves them untouched while everything else (and the trainable
+        # scalars such as E) keeps training. freeze_edges=True freezes the spline
+        # coefficients only; a list/str freezes exactly those leaf keys — e.g.
+        # ["coef", "basis_scale_raw", "basis_shift"] pins the full edge SHAPE (coefficients
+        # and affine), which is what the architectural ★-ladder needs so the frozen edge
+        # stays the exact n-th ★-genfunction while only E is recovered.
+        if freeze_edges is True:
+            model.freeze(keys="coef")
+        else:
+            keys = [freeze_edges] if isinstance(freeze_edges, str) else list(freeze_edges)
+            for k in keys:
+                model.freeze(keys=k)
+
     return model
+
+
+def _apply_edge_affine(model: Any, spec: Any) -> None:
+    """Set the per-edge basis affine (shift and scale) before (optionally) freezing it.
+
+    The weighted bases apply ``x -> (x - shift)/scale`` then a fixed scale; pinning the
+    affine to identity (``shift=0, scale=1``) is what makes a weighted-Laguerre edge emit
+    exactly ``L_m(2s) e^{-s}`` with ``fixed_scale=2``. Without this the Laguerre affine
+    initializes to ``softplus(scale_raw)=2`` (its own convention), which distorts the shape.
+
+    Args:
+        model: a MultKAN with ``.layers`` each exposing ``.basis_shift`` and
+            ``.basis_scale_raw`` (``scale = softplus(scale_raw)``).
+        spec: either the string ``"identity"`` (shift=0, scale=1 on every layer) or a dict
+            ``{layer_index: {"shift": float, "scale": float}}`` giving explicit values.
+    """
+    import math
+    layers = getattr(model, "layers", None)
+    if not layers:
+        return
+
+    def _set(layer, shift, scale):
+        if getattr(layer, "basis_shift", None) is not None and shift is not None:
+            layer.basis_shift = mx.full(layer.basis_shift.shape, float(shift))
+        if getattr(layer, "basis_scale_raw", None) is not None and scale is not None:
+            # softplus(scale_raw) = scale  =>  scale_raw = log(exp(scale) - 1)
+            raw = math.log(math.exp(float(scale)) - 1.0)
+            layer.basis_scale_raw = mx.full(layer.basis_scale_raw.shape, raw)
+
+    if spec == "identity":
+        for layer in layers:
+            _set(layer, 0.0, 1.0)
+        return
+    if isinstance(spec, dict):
+        for i, v in spec.items():
+            if 0 <= int(i) < len(layers):
+                _set(layers[int(i)], v.get("shift"), v.get("scale"))
+
+
+def _apply_edge_coef(model: Any, spec: Any) -> None:
+    """Set edge spline coefficients on a model before (optionally) freezing them.
+
+    Args:
+        model: a MultKAN with ``.layers`` each exposing ``.coef`` of shape
+            ``(in_dim, out_dim, M)``.
+        spec: how to set the coefficients. One of
+            - a dict ``{layer_index: array_like}`` giving the coef for specific layers;
+            - an array_like broadcastable to ``layers[0].coef`` (applied to layer 0);
+            - a callable ``f(layer_index, layer) -> array_like or None`` returning the
+              coef for each layer (``None`` leaves that layer unchanged).
+        The array is reshaped to the layer's coef shape.
+    """
+    layers = getattr(model, "layers", None)
+    if not layers:
+        return
+    if callable(spec):
+        for i, layer in enumerate(layers):
+            val = spec(i, layer)
+            if val is not None:
+                layer.coef = mx.array(np.asarray(val, dtype=np.float32).reshape(layer.coef.shape))
+        return
+    if isinstance(spec, dict):
+        for i, val in spec.items():
+            if 0 <= int(i) < len(layers):
+                layer = layers[int(i)]
+                layer.coef = mx.array(np.asarray(val, dtype=np.float32).reshape(layer.coef.shape))
+        return
+    # array_like -> apply to layer 0
+    layer = layers[0]
+    layer.coef = mx.array(np.asarray(spec, dtype=np.float32).reshape(layer.coef.shape))
 
 
 def _restore_model(model: Any, path: str) -> None:
