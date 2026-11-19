@@ -47,6 +47,7 @@ from .fourier import FourierBasis, ComplexFourierBasis
 from .chebyshev import ChebyshevBasis, ChebyshevSecondKindBasis
 from .hermite import HermiteBasis, WeightedHermiteBasis, ProbabilistHermiteBasis
 from .laguerre import LaguerreBasis, AssociatedLaguerreBasis, HydrogenRadialBasis
+from .bessel import BesselBasis
 from .legendre import LegendreBasis, AssociatedLegendreBasis, SphericalHarmonicBasis
 from .gaussian import GaussianBasis
 
@@ -90,6 +91,7 @@ __all__ = [
     "LaguerreBasis",
     "AssociatedLaguerreBasis",
     "HydrogenRadialBasis",
+    "BesselBasis",
 
     # Legendre
     "LegendreBasis",

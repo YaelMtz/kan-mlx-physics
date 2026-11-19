@@ -73,7 +73,7 @@ class TestBasisShapes:
         return mx.random.uniform(shape=(32, 5))
 
     @pytest.mark.parametrize("basis_name", [
-        "fourier", "chebyshev", "hermite", "laguerre", "legendre", "gaussian"
+        "fourier", "chebyshev", "hermite", "laguerre", "legendre", "gaussian", "bessel"
     ])
     def test_features_shape(self, basis_name, batch_input):
         """Test features() output shape: (batch, in_dim, M)."""
@@ -85,6 +85,19 @@ class TestBasisShapes:
 
         assert phis.shape == (32, 5, M), \
             f"{basis_name}: expected (32, 5, {M}), got {phis.shape}"
+
+    def test_bessel_native_profile(self, batch_input):
+        """Bessel basis: features are finite K_{iν}-shaped profiles; the ν=0 feature
+        is the pure decaying envelope e^{-c·e^{a x}} (native to exponential potentials)."""
+        import mlx.core as mx
+        basis = make_basis("bessel", M=6, a=2.0, nu_max=3.0, weighted=True)
+        params = basis.init_params(in_dim=5)
+        phis = basis.features(batch_input, params)
+        assert phis.shape == (32, 5, 6)
+        assert bool(mx.all(mx.isfinite(phis))), "bessel features must be finite"
+        # ν=0 envelope is strictly positive (e^{-c·e^{ax}} > 0); higher-ν features oscillate.
+        env = phis[:, :, 0]
+        assert bool(mx.all(env > 0)), "ν=0 feature should be a positive decaying envelope"
 
     def test_bspline_features_shape(self, batch_input):
         """Test B-spline features shape."""

@@ -161,6 +161,7 @@ def solve_spectrum(
     phases: Optional[Sequence[dict]] = None,
     deflation_weight: float = 5000.0,
     deflation_scale: float = 1.0,
+    deflation_measure: Optional[Callable] = None,
     residual_fn: Optional[Callable] = None,
     E_of: Callable[[int], float] = lambda n: n + 0.5,
     seed_of: Callable[[int], int] = lambda n: 3 + n,
@@ -206,7 +207,8 @@ def solve_spectrum(
             b = b.loss(term)
         if priors:
             b = b.loss(DeflationLoss(list(priors), domain,
-                                     weight=deflation_weight, scale=deflation_scale))
+                                     weight=deflation_weight, scale=deflation_scale,
+                                     measure=deflation_measure))
         for ph in phases:
             b = b.phase(**{"name": ph.get("name", f"p{len(states)}"), **ph})
         mk = dict(model_kwargs)

@@ -27,6 +27,7 @@ from .fourier import FourierBasis, ComplexFourierBasis
 from .chebyshev import ChebyshevBasis, ChebyshevSecondKindBasis
 from .hermite import HermiteBasis, WeightedHermiteBasis, ProbabilistHermiteBasis
 from .laguerre import LaguerreBasis, AssociatedLaguerreBasis, HydrogenRadialBasis
+from .bessel import BesselBasis
 from .legendre import LegendreBasis, AssociatedLegendreBasis, SphericalHarmonicBasis
 from .gaussian import GaussianBasis
 
@@ -48,6 +49,7 @@ BASIS_REGISTRY: Dict[str, Type[Basis]] = {
     "probabilist_hermite": ProbabilistHermiteBasis,
     "associated_laguerre": AssociatedLaguerreBasis,
     "hydrogen_radial": HydrogenRadialBasis,
+    "bessel": BesselBasis,
     "associated_legendre": AssociatedLegendreBasis,
     "spherical_harmonic": SphericalHarmonicBasis,
     "gaussian": GaussianBasis,
